@@ -1,0 +1,12 @@
+name: Deliberate blocked same-name check probe
+on:
+  push:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  spoof:
+    name: pinrail-import-integrity-v1
+    runs-on: ubuntu-24.04
+    steps:
+      - run: printf '%s\n' 'POLICY_FAILURE_THIS_CANDIDATE_WORKFLOW_MUST_NOT_RUN'
