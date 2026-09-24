@@ -333,7 +333,7 @@ def generated_files(inventory, source, controller_digest, baseline_digest):
                'copybara': {'version': COPYBARA_VERSION, 'source': COPYBARA_SOURCE,
                             'url': COPYBARA_URL, 'sha256': COPYBARA_SHA256},
                'inventory_sha256': hashlib.sha256(canonical(inventory)).hexdigest(),
-               'provenance_policy': 'GitOrigin-RevId is the exact requested snapshot. Copybara-Path-RevId is Copybara native path-affecting history/resumption; raw selected trees must be identical at both revisions.',
+               'provenance_policy': 'GitOrigin-RevId is the exact requested snapshot. Copybara-Path-RevId is Copybara native history/resumption (last path-affecting revision or forced checkpoint); raw selected trees must be identical at both revisions.',
                'scope': 'private-evaluation-only', 'package_dirs': inventory['package_dirs'],
                'lock_policy': 'Upstream Cargo.lock bytes and root patches preserved. No dependency re-resolution performed.',
                'omitted_files': list(OMITTED),
@@ -347,8 +347,9 @@ This tree is a mechanically selected GPUI-family snapshot from
 Copybara owns every path on this branch. Candidate integrity must be recomputed
 using a separately reviewed controller checkout, never candidate code.
 `GitOrigin-RevId` records the requested snapshot; Copybara's automatic
-`Copybara-Path-RevId` records its last path-affecting upstream revision and drives
-resumption. The importer verifies that their selected raw source trees match.
+`Copybara-Path-RevId` records its native resumption revision: normally the last
+path-affecting change, or the requested pin for a gated checkpoint-only update.
+The importer verifies that their selected raw source trees match.
 
 ## PRIVATE EVALUATION ONLY — DISTRIBUTION POLICY NOT CLEARED
 
@@ -523,6 +524,48 @@ core.workflow(
 '''
 
 
+def authorize_checkpoint(repo, base, inventory, generated, scratch, log):
+    """Authorize only pin bookkeeping after an already validated accepted base.
+
+    An empty origin range is not permission to apply arbitrary config drift. Both
+    inventories must match apart from the pin; output may change only the pin in
+    README and the receipt's three checkpoint identities. Copybara's specific
+    empty-range diagnostic and bounded forward ancestry are required as well.
+    """
+    previous_receipt = json.loads(git(repo, 'show', f'{base}:{RECEIPT}'))
+    previous_rev = validate_sha(previous_receipt['upstream'])
+    requested = inventory['upstream']
+    require(previous_rev != requested, 'checkpoint recovery requires a new upstream pin')
+    messages = git(repo, 'log', '--format=%B', base).decode().splitlines()
+    native = next((line.split(': ', 1)[1] for line in messages
+                   if line.startswith('Copybara-Path-RevId: ')), None)
+    validate_sha(native)
+    diagnostic = f'WARN: No changes from {native} up to {requested} match any origin_files.'
+    require(diagnostic in log.read_text(), 'checkpoint recovery requires Copybara empty-origin-range diagnostic')
+    previous, _, _ = discover(previous_rev, scratch)
+    require({k: v for k, v in previous.items() if k != 'upstream'} ==
+            {k: v for k, v in inventory.items() if k != 'upstream'},
+            'checkpoint recovery requires identical reviewed input inventories')
+    bookkeeping = {RECEIPT, 'README.md'}
+    compare_entries({n: e for n, e in expected_entries(inventory, generated).items() if n not in bookkeeping},
+                    {n: e for n, e in git_entries(repo, base).items() if n not in bookkeeping})
+    old_readme = git(repo, 'show', f'{base}:README.md')
+    require(old_readme.replace(previous_rev.encode(), requested.encode()) == generated['README.md'],
+            'checkpoint recovery cannot change README policy')
+    receipt = json.loads(generated[RECEIPT])
+    for key in ('upstream', 'reviewed_baseline_sha256', 'inventory_sha256'):
+        previous_receipt[key] = receipt[key]
+    require(previous_receipt == receipt, 'checkpoint recovery cannot change receipt policy')
+    # Equal selected blobs alone do not authorize rollback or unrelated history.
+    # Fail closed if ancestry cannot be established within the normal fetch bound.
+    history = scratch / 'migration/checkpoint-origin.git'
+    git(scratch, 'init', '--bare', str(history))
+    git(history, 'fetch', '--no-tags', '--filter=blob:none', '--depth=256', UPSTREAM, requested)
+    git(history, 'merge-base', '--is-ancestor', previous_rev, requested)
+    if native != previous_rev:
+        git(history, 'merge-base', '--is-ancestor', native, requested)
+
+
 def run_import(args):
     validate_sha(args.upstream)
     validate_sha(args.accepted_base)
@@ -556,6 +599,24 @@ def run_import(args):
     with log.open('wb') as handle:
         result = subprocess.run(command, stdout=handle, stderr=subprocess.STDOUT, env=git_env())
     refs = git(destination, 'for-each-ref', '--format=%(refname)').decode().splitlines()
+    expected = expected_entries(inventory, generated)
+    checkpoint_update, checkpoint_log = False, None
+    if 'refs/heads/candidate' not in refs:
+        require(result.returncode in (0, 4), f'Copybara failed: exit {result.returncode}; see {log}')
+        if not initial and expected != git_entries(destination, args.accepted_base):
+            require(result.returncode == 4, f'checkpoint recovery requires empty migration exit 4; see {log}')
+            authorize_checkpoint(destination, args.accepted_base, inventory, generated, scratch, log)
+            # Exactly one recovery, only for a proven pin-only bookkeeping update.
+            # Copybara still writes the commit and both provenance markers itself.
+            forced_command = command + ['--force']
+            (run / 'checkpoint-command.json').write_bytes(canonical(forced_command))
+            checkpoint_log = run / 'checkpoint-copybara.log'
+            with checkpoint_log.open('wb') as handle:
+                result = subprocess.run(forced_command, stdout=handle, stderr=subprocess.STDOUT, env=git_env())
+            require(result.returncode == 0, f'Copybara checkpoint failed: exit {result.returncode}; see {checkpoint_log}')
+            refs = git(destination, 'for-each-ref', '--format=%(refname)').decode().splitlines()
+            require('refs/heads/candidate' in refs, 'checkpoint regeneration did not produce a candidate')
+            checkpoint_update = True
     if 'refs/heads/candidate' in refs:
         candidate = git(destination, 'rev-parse', 'refs/heads/candidate').decode().strip()
         require(result.returncode == 0, f'Copybara exit {result.returncode}; see {log}')
@@ -565,19 +626,20 @@ def run_import(args):
         validate_effective_origin(effective, inventory, scratch)
         noop = False
     else:
-        # Only accept a no-op when the accepted tree is exactly the requested output.
-        require(result.returncode in (0, 4), f'Copybara failed: exit {result.returncode}; see {log}')
+        # Source-noop is output-noop only if even the checkpoint files match.
         candidate, noop = args.accepted_base, True
-    compare_entries(expected_entries(inventory, generated), git_entries(destination, candidate))
-    audit = audit_source_inputs(expected_entries(inventory, generated),
+    compare_entries(expected, git_entries(destination, candidate))
+    audit = audit_source_inputs(expected,
                                 lambda name: git(destination, 'show', f'{candidate}:{name}'),
                                 inventory['package_dirs'])
     (run / 'input-audit.json').write_bytes(canonical(audit))
     tree = git(destination, 'rev-parse', f'{candidate}^{{tree}}').decode().strip()
     output = {'candidate': candidate, 'base': args.accepted_base, 'tree': tree,
               'upstream': args.upstream, 'controller': args.controller_rev, 'noop': noop,
+              'checkpoint_update': checkpoint_update,
+              'checkpoint_log': str(checkpoint_log) if checkpoint_log else None,
               'candidate_repo': str(destination), 'log': str(log), 'scope': 'private-evaluation-only',
-              'files': len(expected_entries(inventory, generated)), 'packages': len(inventory['package_dirs'])}
+              'files': len(expected), 'packages': len(inventory['package_dirs'])}
     (run / 'result.json').write_bytes(canonical(output))
     return output
 
