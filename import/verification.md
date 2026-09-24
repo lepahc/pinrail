@@ -1,5 +1,90 @@
 # Executed local verification
 
+## Integrated reviewed-source route
+
+Controller code and reviewed baselines tested at
+`2f0b773c1654ff07eba0f1cf4394d643a609a238`, after ancestry-preserving merges of
+`02d18b5acb51b6fc9392b5d5ce7127aa4ced4ee5` and
+`9ee802cdef592d542b80afd4035f137f5f4ba0e1` with the pinned Microsoft notice.
+Controller-code/notice SHA-256:
+`a9715e9f3c6027aa0638b94a02eda96e192f50084618ff02a86541ea763fa52f`.
+Documentation-only additions do not change that digest or the generated tree.
+
+The initial source candidate is **`f0ed7dfd77382c0865f3be016d61d97a0ea1de43`**,
+with exactly one parent, shared seed
+`875ec5e0a0a13b44076e43bb8a46629a8d447091`.
+Its independently recomputed Git tree is
+**`9172499986e73a2d31f1a34d186b59cfb3cb551a`**. The clean-root verification wrote
+`17947926b16aaf0962023d8c2d663bd64a1dfef6` with the same exact tree; it is a
+verification artifact, not a replacement for the named candidate.
+
+Executed against the integrated controller:
+
+- **30 Python regression tests passed**, covering committed scope authorization,
+  notice integrity, Cargo projection, checkpoint recovery, and existing drift
+  gates. `--source-import` requires `reviewed-source-import`; a private-only or
+  unknown scope cannot authorize it. Private evaluation is still supported.
+- Real pinned Copybara prior import, independent prior verification, merge
+  acceptance, no-op, current update, independent update verification, and another
+  merged no-op all passed. A representative downstream source patch survived the
+  actual update merge. All five forged candidate mutations were rejected,
+  including full CLI recomputation against a candidate-added checker.
+- Real selected update -> excluded-only checkpoint -> verification -> merged
+  same-pin retry passed with the integrated lock and notices. Recovery changed
+  only `PINRAIL_IMPORT.json` and `README.md`, used exactly one gated `--force`,
+  and the retry used no force or new candidate ref. The additional native-pin
+  review and lock exist only in the disposable fixture controller, not production.
+- Direct current import from the shared seed and independent clean-root verify
+  passed in reviewed-source scope. The resulting tree also equals the tree from
+  the prior/current merge proof and the checkpoint proof.
+- The previously build-tested `f1253a7f760652272d4e28229295b11f9b8b4283` was
+  deliberately rejected as an accepted base before Copybara ran. Old trees and
+  controller digests were not grandfathered in or reconstructed with old digests.
+- Real private-mode current import and same-pin no-op passed using the same
+  source-reviewed baselines, while emitting private-only scope.
+- Full `cargo +1.98.1 metadata --locked --all-features --format-version 1`
+  passed, including a repeat from inside the actual generated Git worktree:
+  exactly 875 packages matching the complete committed lock, 27 workspace members,
+  and no escaped path dependencies or changed tracked files/lock.
+
+Independent Git comparison with the previously build-tested standalone candidate
+changed exactly `.gitattributes`, `LICENSE-MICROSOFT-MIT`, `PINRAIL_IMPORT.json`,
+and `README.md`. **Every runtime source file, Cargo/build input and asset remains
+byte/mode-identical.** The exact original inventories and reviewed lock bytes at
+both production pins were also compared with `02d18b5` and are unchanged. There
+are 414 generated files, 28 preserved/resolved symlinks, eight retained OFL font
+files, and the retained macOS `cbindgen` 0.28.0 dependency. Microsoft permission
+text was independently read back and matches its pinned SHA-256 exactly.
+
+No duplicate Rust compilation/test run was performed in this lane. The historical
+Linux workspace check and 439 headless test passes below are carried-forward
+coverage for identical source/build inputs, not new execution claims. Non-Linux
+compilation, real compositor/GPU behavior, complete third-party/license clearance,
+crate releases and consumer changes remain outside this result.
+
+All new evidence is under `/home/chapel/Projects/pinrail-land`:
+
+- `.scratch/controller-unit-final.log`: complete 30-test regression result.
+- `.scratch/landing-proof/results.json`: integrated command exits, exact candidate,
+  inventory/lock preservation and independent source/notice/count comparisons.
+- `.scratch/landing-proof/local/proofs.json` and
+  `.scratch/landing-proof/checkpoint/proofs.json`: complete real migration chains.
+- `.scratch/landing-proof/source-initial/migration/destination.git`: **candidate
+  repository**, `refs/heads/candidate` names the exact initial candidate above.
+- `.scratch/landing-proof/source-verify.stdout`: independent exact-candidate verify.
+- `.scratch/landing-proof/source-worktree`: clean detached generated source tree.
+- `.scratch/landing-proof/metadata-in-worktree.{stdout,stderr}`: full final metadata.
+- `.scratch/landing-proof.log` and `.scratch/prove_landing.py`: orchestration log
+  and exact local proof driver. The bounded systemd unit exited successfully with
+  MemoryMax 10G, MemoryHigh 8G, CPUQuota 200%, TasksMax 512, two Cargo jobs, disk
+  scratch and display variables unset; peak reported memory was 825.4M.
+
+This lane performed no remote GitHub writes and added no workflow/runtime patches.
+Public source landing is separately authorized, but the importer itself only
+writes its local disposable candidate repository.
+
+## Historical lane evidence
+
 The following are historical proofs of the separate checkpoint and standalone
 lanes, before their controller integration. Their artifact identities and counts
 are not claims about the newly integrated controller. These are local candidates,
