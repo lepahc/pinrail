@@ -95,7 +95,9 @@ GitHub reviewer identity.
   importer tests which themselves invoke Cargo (the pin exists before main has
   the generated source's root toolchain file);
 - runs full all-feature locked Cargo metadata, the entire workspace all-target
-  Linux check with test support, and GPUI/Linux/wgpu headless library tests.
+  Linux check with test support, GPUI/wgpu headless library tests, and Linux
+  `--tests` so retained pointer-dispatch/offscreen integration regressions execute
+  rather than merely compile. Linux library tests run once through that command.
 
 The exact head must contain B as an ancestor; strict up-to-date checks remain
 necessary at merge time. The commands match the qualified Linux profile, use two

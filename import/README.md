@@ -303,7 +303,8 @@ cache read-only to save discovery traffic; pinned raw blobs are still verified.
 trusted controller, creates a fresh actual Git worktree, then runs full locked
 all-feature metadata, Linux all-target checks for `gpui`, `gpui_platform`,
 `gpui_linux`, and `gpui_wgpu`, a full-workspace Linux all-target check, and library
-tests for `gpui`, `gpui_linux`, and `gpui_wgpu`. It checks the complete metadata
+tests for `gpui` and `gpui_wgpu`, plus Linux library/integration tests with
+`gpui_linux --tests`. It checks the complete metadata
 identity set against the reviewed
 lock, forbids path dependencies outside that worktree, and checks that Cargo did
 not modify the lock or tracked source. It does not execute GUI examples.
