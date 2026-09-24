@@ -102,6 +102,17 @@ impl LinuxClient for HeadlessClient {
         _handle: AnyWindowHandle,
         params: WindowParams,
     ) -> anyhow::Result<Box<dyn PlatformWindow>> {
+        // Use an explicit supported set: gpui's `wayland` feature can also be
+        // enabled by another dependent, independently of this crate's features.
+        match &params.kind {
+            gpui::WindowKind::Normal
+            | gpui::WindowKind::PopUp
+            | gpui::WindowKind::Floating
+            | gpui::WindowKind::Dialog
+            | gpui::WindowKind::AnchoredPopup(_) => {}
+            #[allow(unreachable_patterns)]
+            _ => anyhow::bail!("this backend does not support Wayland layer-shell windows"),
+        }
         Ok(Box::new(HeadlessWindow::new(
             params,
             self.0.borrow().display.clone(),

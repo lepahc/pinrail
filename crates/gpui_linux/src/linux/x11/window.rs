@@ -466,6 +466,17 @@ impl X11WindowState {
         supports_xinput_gestures: bool,
         is_bgr: bool,
     ) -> anyhow::Result<Self> {
+        // Use an explicit supported set: gpui's `wayland` feature can also be
+        // enabled by another dependent, independently of this crate's features.
+        match &params.kind {
+            gpui::WindowKind::Normal
+            | gpui::WindowKind::PopUp
+            | gpui::WindowKind::Floating
+            | gpui::WindowKind::Dialog
+            | gpui::WindowKind::AnchoredPopup(_) => {}
+            #[allow(unreachable_patterns)]
+            _ => anyhow::bail!("this backend does not support Wayland layer-shell windows"),
+        }
         // Native popups are not implemented on X11 yet. Rejecting lets callers fall back to
         // gpui's in-window popovers.
         if let WindowKind::AnchoredPopup(_) = params.kind {

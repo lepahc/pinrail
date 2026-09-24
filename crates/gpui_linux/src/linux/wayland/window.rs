@@ -6,6 +6,7 @@ use std::{
     sync::Arc,
 };
 
+use super::frame_loop::{FrameLoop, PresentationState, schedule_retry};
 use calloop::ping::Ping;
 use collections::{FxHashMap, HashMap};
 use futures::channel::oneshot::Receiver;
@@ -107,6 +108,7 @@ pub struct WaylandWindowState {
     appearance: WindowAppearance,
     blur: Option<org_kde_kwin_blur::OrgKdeKwinBlur>,
     viewport: Option<wp_viewport::WpViewport>,
+    fractional_scale: Option<wp_fractional_scale_v1::WpFractionalScaleV1>,
     outputs: HashMap<ObjectId, Output>,
     display: Option<(ObjectId, Output)>,
     globals: Globals,
@@ -128,6 +130,7 @@ pub struct WaylandWindowState {
     hovered: bool,
     redraw_requested: bool,
     presentation: PresentationState,
+    last_presented_geometry: Option<[i32; 4]>,
     pending_frame_callback: Option<wl_callback::WlCallback>,
     in_progress_configure: Option<InProgressConfigure>,
     resize_throttle: bool,
@@ -158,6 +161,14 @@ impl WaylandSurfaceState {
                 return Err(LayerShellNotSupportedError.into());
             };
 
+            anyhow::ensure!(
+                super::layer_policy::keyboard_supported(
+                    layer_shell.version(),
+                    options.keyboard_interactivity
+                        == gpui::layer_shell::KeyboardInteractivity::OnDemand,
+                ),
+                "layer-shell OnDemand keyboard interactivity requires protocol version 4",
+            );
             let layer_surface = layer_shell.get_layer_surface(
                 &surface,
                 target_output.as_ref(),
@@ -196,6 +207,7 @@ impl WaylandSurfaceState {
             return Ok(WaylandSurfaceState::LayerShell(WaylandLayerSurfaceState {
                 layer_surface,
                 anchor: options.anchor,
+                requested_size: params.bounds.size,
             }));
         }
 
@@ -306,6 +318,7 @@ pub struct WaylandXdgSurfaceState {
 pub struct WaylandLayerSurfaceState {
     layer_surface: zwlr_layer_surface_v1::ZwlrLayerSurfaceV1,
     anchor: Anchor,
+    requested_size: Size<Pixels>,
 }
 
 pub struct WaylandPopupSurfaceState {
@@ -420,21 +433,6 @@ impl WaylandSurfaceState {
         }
     }
 
-    fn set_geometry(&self, x: i32, y: i32, width: i32, height: i32) {
-        match self {
-            WaylandSurfaceState::Xdg(WaylandXdgSurfaceState { xdg_surface, .. }) => {
-                xdg_surface.set_window_geometry(x, y, width, height);
-            }
-            WaylandSurfaceState::LayerShell(WaylandLayerSurfaceState { layer_surface, .. }) => {
-                // cannot set window position of a layer surface
-                layer_surface.set_size(width as u32, height as u32);
-            }
-            WaylandSurfaceState::Popup(WaylandPopupSurfaceState { xdg_surface, .. }) => {
-                xdg_surface.set_window_geometry(x, y, width, height);
-            }
-        }
-    }
-
     // Re-anchors a mapped popup at a new size via `xdg_popup.reposition`. Repositioning an
     // unmapped popup (before the first configure) is a protocol error.
     fn reposition_popup(
@@ -479,6 +477,10 @@ impl WaylandSurfaceState {
         anchor: Anchor,
         edge: Anchor,
     ) -> bool {
+        if layer_surface.version() < zwlr_layer_surface_v1::REQ_SET_EXCLUSIVE_EDGE_SINCE {
+            log::warn!("ignoring exclusive edge: layer-shell version 5 is required");
+            return false;
+        }
         if edge.bits().count_ones() == 1 && anchor.contains(edge) {
             layer_surface.set_exclusive_edge(super::layer_shell::wayland_anchor(edge));
             true
@@ -549,9 +551,10 @@ impl WaylandWindowState {
     pub(crate) fn new(
         handle: AnyWindowHandle,
         surface: wl_surface::WlSurface,
-        surface_state: WaylandSurfaceState,
+        mut surface_state: WaylandSurfaceState,
         appearance: WindowAppearance,
         viewport: Option<wp_viewport::WpViewport>,
+        fractional_scale: Option<wp_fractional_scale_v1::WpFractionalScaleV1>,
         client: WaylandClientStatePtr,
         globals: Globals,
         gpu_context: gpui_wgpu::GpuContext,
@@ -578,7 +581,21 @@ impl WaylandWindowState {
                 // Prefer Mailbox to avoid blocking. Falls back to FIFO if Mailbox is unsupported.
                 preferred_present_mode: Some(wgpu::PresentMode::Mailbox),
             };
-            WgpuRenderer::new(gpu_context, &raw_window, config, compositor_gpu)?
+            match WgpuRenderer::new(gpu_context, &raw_window, config, compositor_gpu) {
+                Ok(renderer) => renderer,
+                Err(error) => {
+                    if let Some(parent) = &parent {
+                        parent.state.borrow_mut().children.remove(&surface.id());
+                    }
+                    destroy_surface(
+                        &mut surface_state,
+                        viewport.as_ref(),
+                        fractional_scale.as_ref(),
+                        &surface,
+                    );
+                    return Err(error);
+                }
+            }
         };
 
         if let WaylandSurfaceState::Xdg(ref xdg_state) = surface_state {
@@ -606,6 +623,7 @@ impl WaylandWindowState {
             app_id: options.app_id,
             blur: None,
             viewport,
+            fractional_scale,
             globals,
             outputs: HashMap::default(),
             display: None,
@@ -629,12 +647,36 @@ impl WaylandWindowState {
             hovered: false,
             redraw_requested: false,
             presentation: PresentationState::Unpresented,
+            last_presented_geometry: None,
             pending_frame_callback: None,
             in_progress_window_controls: None,
             window_controls: WindowControls::default(),
             client_inset: None,
             accesskit_adapter: None,
         })
+    }
+
+    fn xdg_geometry(&self) -> [i32; 4] {
+        let (x, width) = super::geometry::geometry_axis(
+            f32::from(self.bounds.size.width),
+            f32::from(self.inset()),
+            self.tiling.left,
+            self.tiling.right,
+        );
+        let (y, height) = super::geometry::geometry_axis(
+            f32::from(self.bounds.size.height),
+            f32::from(self.inset()),
+            self.tiling.top,
+            self.tiling.bottom,
+        );
+        [x, y, width, height]
+    }
+
+    fn set_xdg_geometry(&self) {
+        let [x, y, width, height] = self.xdg_geometry();
+        if let Some(surface) = self.surface_state.xdg_surface() {
+            surface.set_window_geometry(x, y, width, height);
+        }
     }
 
     pub fn is_transparent(&self) -> bool {
@@ -677,75 +719,6 @@ impl WaylandWindowState {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum PresentationState {
-    Unpresented,
-    Presented,
-    RetryBeforeFirstPresent,
-    RetryAfterPresent,
-}
-
-impl PresentationState {
-    fn requires_presentation(self) -> bool {
-        matches!(
-            self,
-            Self::RetryBeforeFirstPresent | Self::RetryAfterPresent
-        )
-    }
-
-    fn failed(self) -> Self {
-        match self {
-            Self::Unpresented | Self::RetryBeforeFirstPresent => Self::RetryBeforeFirstPresent,
-            Self::Presented | Self::RetryAfterPresent => Self::RetryAfterPresent,
-        }
-    }
-}
-
-#[cfg(test)]
-mod presentation_state_tests {
-    use super::PresentationState;
-
-    #[test]
-    fn failure_tracks_whether_the_surface_has_presented() {
-        assert_eq!(
-            PresentationState::Unpresented.failed(),
-            PresentationState::RetryBeforeFirstPresent
-        );
-        assert_eq!(
-            PresentationState::RetryBeforeFirstPresent.failed(),
-            PresentationState::RetryBeforeFirstPresent
-        );
-        assert_eq!(
-            PresentationState::Presented.failed(),
-            PresentationState::RetryAfterPresent
-        );
-        assert_eq!(
-            PresentationState::RetryAfterPresent.failed(),
-            PresentationState::RetryAfterPresent
-        );
-    }
-
-    #[test]
-    fn only_retry_states_require_presentation() {
-        assert!(!PresentationState::Unpresented.requires_presentation());
-        assert!(!PresentationState::Presented.requires_presentation());
-        assert!(PresentationState::RetryBeforeFirstPresent.requires_presentation());
-        assert!(PresentationState::RetryAfterPresent.requires_presentation());
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum FrameLoop {
-    Unconfigured,
-    Ticking,
-    RescheduleRequested,
-    PresentationFailed,
-    AwaitingCallback,
-    Scheduled,
-    RetryScheduled,
-    Parked,
-}
-
 pub(crate) struct WaylandWindow(pub WaylandWindowStatePtr);
 pub enum ImeInput {
     InsertText(String),
@@ -756,7 +729,7 @@ pub enum ImeInput {
 
 impl Drop for WaylandWindow {
     fn drop(&mut self) {
-        self.0.frame_loop.set(FrameLoop::Parked);
+        self.0.frame_loop.set(FrameLoop::Closed);
 
         let mut state = self.0.state.borrow_mut();
         let surface_id = state.surface.id();
@@ -774,24 +747,19 @@ impl Drop for WaylandWindow {
             blur.release();
         }
 
-        // Decorations must be destroyed before the xdg state.
-        // See https://wayland.app/protocols/xdg-decoration-unstable-v1#zxdg_toplevel_decoration_v1
-        if let Some(decoration) = &state.surface_state.decoration() {
-            decoration.destroy();
-        }
-
-        // Surface state might contain xdg_toplevel/xdg_surface which can be destroyed now that
-        // decorations are gone. layer_surface has no dependencies.
-        state.surface_state.destroy();
-
-        // Viewport must be destroyed before the wl_surface.
-        // See https://wayland.app/protocols/viewporter#wp_viewport
-        if let Some(viewport) = &state.viewport {
-            viewport.destroy();
-        }
-
-        // The wl_surface itself should always be destroyed last.
-        state.surface.destroy();
+        let WaylandWindowState {
+            surface_state,
+            viewport,
+            fractional_scale,
+            surface,
+            ..
+        } = &mut *state;
+        destroy_surface(
+            surface_state,
+            viewport.as_ref(),
+            fractional_scale.as_ref(),
+            surface,
+        );
 
         let state_ptr = self.0.clone();
         state
@@ -804,6 +772,27 @@ impl Drop for WaylandWindow {
             .detach();
         drop(state);
     }
+}
+
+// The renderer must be gone before this boundary. Failed construction never
+// installed one; normal Drop explicitly destroys it first.
+fn destroy_surface(
+    role: &mut WaylandSurfaceState,
+    viewport: Option<&wp_viewport::WpViewport>,
+    fractional_scale: Option<&wp_fractional_scale_v1::WpFractionalScaleV1>,
+    surface: &wl_surface::WlSurface,
+) {
+    if let Some(decoration) = role.decoration() {
+        decoration.destroy();
+    }
+    role.destroy();
+    if let Some(viewport) = viewport {
+        viewport.destroy();
+    }
+    if let Some(fractional_scale) = fractional_scale {
+        fractional_scale.destroy();
+    }
+    surface.destroy();
 }
 
 impl WaylandWindow {
@@ -828,18 +817,25 @@ impl WaylandWindow {
         target_output: Option<wl_output::WlOutput>,
     ) -> anyhow::Result<(Self, ObjectId)> {
         let surface = globals.compositor.create_surface(&globals.qh, ());
-        let surface_state = WaylandSurfaceState::new(
+        let surface_state = match WaylandSurfaceState::new(
             &surface,
             &globals,
             &params,
             parent.clone(),
             popup_grab,
             target_output,
-        )?;
+        ) {
+            Ok(role) => role,
+            Err(error) => {
+                surface.destroy();
+                return Err(error);
+            }
+        };
 
-        if let Some(fractional_scale_manager) = globals.fractional_scale_manager.as_ref() {
-            fractional_scale_manager.get_fractional_scale(&surface, &globals.qh, surface.id());
-        }
+        let fractional_scale = globals
+            .fractional_scale_manager
+            .as_ref()
+            .map(|manager| manager.get_fractional_scale(&surface, &globals.qh, surface.id()));
 
         let viewport = globals
             .viewporter
@@ -854,6 +850,7 @@ impl WaylandWindow {
                 surface_state,
                 appearance,
                 viewport,
+                fractional_scale,
                 client,
                 globals,
                 gpu_context,
@@ -916,12 +913,22 @@ impl WaylandWindowStatePtr {
         state.children.insert(child, blocking);
     }
 
+    pub fn is_closed(&self) -> bool {
+        self.frame_loop.get() == FrameLoop::Closed
+    }
+
     pub fn is_blocked(&self) -> bool {
+        if self.is_closed() {
+            return true;
+        }
         let state = self.state.borrow();
         state.children.values().any(|&blocking| blocking)
     }
 
     pub fn frame(&self) {
+        if self.is_closed() {
+            return;
+        }
         self.frame_loop.set(FrameLoop::Ticking);
         let mut state = self.state.borrow_mut();
         state.resize_throttle = false;
@@ -931,8 +938,8 @@ impl WaylandWindowStatePtr {
         let require_presentation = state.presentation.requires_presentation();
         drop(state);
 
-        let mut callbacks = self.callbacks.borrow_mut();
-        let Some(request_frame_callback) = callbacks.request_frame.as_mut() else {
+        let callback = self.callbacks.borrow_mut().request_frame.take();
+        let Some(mut request_frame_callback) = callback else {
             self.frame_loop.set(FrameLoop::Parked);
             return;
         };
@@ -940,13 +947,19 @@ impl WaylandWindowStatePtr {
             force_render,
             require_presentation,
         });
+        if self.is_closed() {
+            return;
+        }
+        self.callbacks.borrow_mut().request_frame = Some(request_frame_callback);
         self.update_ime_enabled();
-        drop(callbacks);
 
         self.complete_frame();
     }
 
     fn complete_frame(&self) {
+        if self.is_closed() {
+            return;
+        }
         let mut state = self.state.borrow_mut();
 
         let frame_loop = self.frame_loop.get();
@@ -970,20 +983,26 @@ impl WaylandWindowStatePtr {
                 return;
             }
 
-            self.frame_loop.set(FrameLoop::RetryScheduled);
             let surface_id = state.surface.id();
             let client = state.client.clone();
             drop(state);
-            client.schedule_frame_retry(&surface_id);
+            schedule_retry(
+                &self.frame_loop,
+                || client.schedule_frame_retry(&surface_id),
+                || self.frame_ping.ping(),
+            );
             return;
         }
 
         if frame_loop == FrameLoop::RescheduleRequested || state.redraw_requested {
-            self.frame_loop.set(FrameLoop::RetryScheduled);
             let surface_id = state.surface.id();
             let client = state.client.clone();
             drop(state);
-            client.schedule_frame_retry(&surface_id);
+            schedule_retry(
+                &self.frame_loop,
+                || client.schedule_frame_retry(&surface_id),
+                || self.frame_ping.ping(),
+            );
             return;
         }
 
@@ -1012,22 +1031,14 @@ impl WaylandWindowStatePtr {
     }
 
     pub fn is_configured(&self) -> bool {
-        self.frame_loop.get() != FrameLoop::Unconfigured
+        !matches!(
+            self.frame_loop.get(),
+            FrameLoop::Unconfigured | FrameLoop::Closed
+        )
     }
 
     pub fn schedule_frame(&self) {
-        match self.frame_loop.get() {
-            FrameLoop::Parked => {
-                self.frame_loop.set(FrameLoop::Scheduled);
-                self.frame_ping.ping();
-            }
-            FrameLoop::Ticking => {
-                self.frame_loop.set(FrameLoop::RescheduleRequested);
-            }
-            // A wake is already armed: a ping or retry timer is in flight, or a
-            // presented buffer guarantees a compositor frame callback.
-            _ => {}
-        }
+        super::frame_loop::schedule_frame(&self.frame_loop, || self.frame_ping.ping());
     }
 
     fn request_redraw(&self) {
@@ -1044,13 +1055,15 @@ impl WaylandWindowStatePtr {
         let ime_enabled = if let Some(mut input_handler) = state.input_handler.take() {
             drop(state);
             let accepts_text_input = input_handler.query_accepts_text_input();
-            self.state.borrow_mut().input_handler = Some(input_handler);
+            if !self.is_closed() {
+                self.state.borrow_mut().input_handler = Some(input_handler);
+            }
             accepts_text_input
         } else {
             drop(state);
             false
         };
-        if Some(ime_enabled) == client.ime_enabled() {
+        if self.is_closed() || Some(ime_enabled) == client.ime_enabled() {
             return;
         }
 
@@ -1119,23 +1132,17 @@ impl WaylandWindowStatePtr {
                     }
                 }
             }
+            if self.is_closed() {
+                return;
+            }
             let state = self.state.borrow_mut();
             state.surface_state.ack_configure(serial);
 
-            let window_geometry = inset_by_tiling(
-                state.bounds.map_origin(|_| px(0.0)),
-                state.inset(),
-                state.tiling,
-            )
-            .map(|v| f32::from(v) as i32)
-            .map_size(|v| if v <= 0 { 1 } else { v });
-
-            state.surface_state.set_geometry(
-                window_geometry.origin.x,
-                window_geometry.origin.y,
-                window_geometry.size.width,
-                window_geometry.size.height,
-            );
+            // Popup placement/size is configure-driven. Toplevel geometry is
+            // staged with the resized draw, never ahead of WGPU reconfiguration.
+            if matches!(state.surface_state, WaylandSurfaceState::Popup(_)) {
+                state.set_xdg_geometry();
+            }
 
             let initial_configure = self.frame_loop.get() == FrameLoop::Unconfigured;
             drop(state);
@@ -1304,38 +1311,43 @@ impl WaylandWindowStatePtr {
     }
 
     pub fn handle_layersurface_event(&self, event: zwlr_layer_surface_v1::Event) -> bool {
+        if self.is_closed() {
+            return false;
+        }
         match event {
             zwlr_layer_surface_v1::Event::Configure {
                 width,
                 height,
                 serial,
             } => {
-                let size = if width == 0 || height == 0 {
-                    None
-                } else {
-                    Some(size(px(width as f32), px(height as f32)))
+                let state = self.state.borrow();
+                let WaylandSurfaceState::LayerShell(layer) = &state.surface_state else {
+                    return false;
                 };
-
-                let mut state = self.state.borrow_mut();
-                state.in_progress_configure = Some(InProgressConfigure {
-                    size,
-                    fullscreen: false,
-                    maximized: false,
-                    resizing: false,
-                    visibility: WindowVisibility::Visible,
-                    tiling: Tiling::default(),
-                });
+                // Acknowledge before resizing can invoke application code or present.
+                layer.layer_surface.ack_configure(serial);
+                let [width, height] = super::layer_policy::configure_size(
+                    [
+                        f32::from(layer.requested_size.width),
+                        f32::from(layer.requested_size.height),
+                    ],
+                    [width, height],
+                );
                 drop(state);
-
-                // just do the same thing we'd do as an xdg_surface
-                self.handle_xdg_surface_event(xdg_surface::Event::Configure { serial });
-
+                self.resize(size(px(width), px(height)));
+                if self.is_closed() {
+                    return false;
+                }
+                if !self.is_configured() {
+                    self.frame();
+                } else {
+                    self.request_redraw();
+                }
                 false
             }
-            zwlr_layer_surface_v1::Event::Closed => {
-                // unlike xdg, we don't have a choice here: the surface is closing.
-                true
-            }
+            // Unlike xdg, the compositor revokes this role unconditionally.
+            // The dispatcher calls close(), never the application's should_close.
+            zwlr_layer_surface_v1::Event::Closed => true,
             _ => false,
         }
     }
@@ -1453,22 +1465,32 @@ impl WaylandWindowStatePtr {
                     }
                 }
             }
-            self.state.borrow_mut().input_handler = Some(input_handler);
+            if !self.is_closed() {
+                self.state.borrow_mut().input_handler = Some(input_handler);
+            }
         }
     }
 
     pub fn get_ime_area(&self) -> Option<Bounds<Pixels>> {
+        if self.is_closed() {
+            return None;
+        }
         let mut state = self.state.borrow_mut();
         let mut bounds: Option<Bounds<Pixels>> = None;
         if let Some(mut input_handler) = state.input_handler.take() {
             drop(state);
             bounds = input_handler.ime_candidate_bounds();
-            self.state.borrow_mut().input_handler = Some(input_handler);
+            if !self.is_closed() {
+                self.state.borrow_mut().input_handler = Some(input_handler);
+            }
         }
         bounds
     }
 
     pub fn set_size_and_scale(&self, size: Option<Size<Pixels>>, scale: Option<f32>) {
+        if self.is_closed() {
+            return;
+        }
         let (size, scale) = {
             let mut state = self.state.borrow_mut();
             if size.is_none_or(|size| size == state.bounds.size)
@@ -1493,7 +1515,7 @@ impl WaylandWindowStatePtr {
             self.callbacks.borrow_mut().resize = Some(fun);
         }
 
-        {
+        if !self.is_closed() {
             let state = self.state.borrow();
             if let Some(viewport) = &state.viewport {
                 viewport
@@ -1511,6 +1533,9 @@ impl WaylandWindowStatePtr {
     }
 
     pub fn close(&self) {
+        // Revoke input/draw before application callbacks can reenter. Drop also
+        // marks Closed before renderer teardown; the close callback is still taken once.
+        self.frame_loop.set(FrameLoop::Closed);
         let state = self.state.borrow();
         let client = state.client.get_client();
         let children = state.children.keys().cloned().collect::<Vec<_>>();
@@ -1525,8 +1550,8 @@ impl WaylandWindowStatePtr {
                 child.close();
             }
         }
-        let mut callbacks = self.callbacks.borrow_mut();
-        if let Some(fun) = callbacks.close.take() {
+        let callback = self.callbacks.borrow_mut().close.take();
+        if let Some(fun) = callback {
             fun()
         }
     }
@@ -1539,7 +1564,7 @@ impl WaylandWindowStatePtr {
         if let Some(mut fun) = callback {
             let result = fun(input.clone());
             self.callbacks.borrow_mut().input = Some(fun);
-            if !result.propagate {
+            if !result.propagate || self.is_closed() {
                 return;
             }
         }
@@ -1551,7 +1576,9 @@ impl WaylandWindowStatePtr {
             if let Some(mut input_handler) = state.input_handler.take() {
                 drop(state);
                 input_handler.replace_text_in_range(None, key_char);
-                self.state.borrow_mut().input_handler = Some(input_handler);
+                if !self.is_closed() {
+                    self.state.borrow_mut().input_handler = Some(input_handler);
+                }
             }
         }
     }
@@ -1704,31 +1731,41 @@ impl PlatformWindow for WaylandWindow {
             return;
         }
 
-        // Keep window geometry consistent with configure handling. On Wayland, window geometry is
-        // surface-local: resizing should not attempt to translate the window; the compositor
-        // controls placement. We also account for client-side decoration insets and tiling.
-        let window_geometry = inset_by_tiling(
-            Bounds {
-                origin: Point::default(),
-                size,
-            },
-            state.inset(),
-            state.tiling,
-        )
-        .map(|v| f32::from(v) as i32)
-        .map_size(|v| if v <= 0 { 1 } else { v });
-
-        state.surface_state.set_geometry(
-            window_geometry.origin.x,
-            window_geometry.origin.y,
-            window_geometry.size.width,
-            window_geometry.size.height,
-        );
+        if matches!(state.surface_state, WaylandSurfaceState::LayerShell(_)) {
+            drop(state);
+            let mut state = self.borrow_mut();
+            if let WaylandSurfaceState::LayerShell(layer) = &mut state.surface_state {
+                layer.requested_size = size;
+                layer.layer_surface.set_size(
+                    f32::from(size.width).max(1.0) as u32,
+                    f32::from(size.height).max(1.0) as u32,
+                );
+            }
+            state
+                .globals
+                .executor
+                .spawn(async move {
+                    state_ptr.resize(size);
+                    state_ptr.request_redraw();
+                })
+                .detach();
+            return;
+        }
+        let size = if matches!(state.surface_state, WaylandSurfaceState::Xdg(_)) {
+            // Window::resize is content-sized, like xdg configure. The renderer
+            // includes only those decoration insets not suppressed by tiling.
+            compute_outer_size(state.inset(), Some(size), state.tiling).unwrap()
+        } else {
+            size
+        };
 
         state
             .globals
             .executor
-            .spawn(async move { state_ptr.resize(size) })
+            .spawn(async move {
+                state_ptr.resize(size);
+                state_ptr.request_redraw();
+            })
             .detach();
     }
 
@@ -1790,6 +1827,9 @@ impl PlatformWindow for WaylandWindow {
         // Try to request an activation token. Even though the activation is likely going to be rejected,
         // KWin and Mutter can use the app_id to visually indicate we're requesting attention.
         let state = self.borrow();
+        if self.0.is_closed() || state.surface_state.toplevel().is_none() {
+            return;
+        }
         if let (Some(activation), Some(app_id)) = (&state.globals.activation, state.app_id.clone())
         {
             state.client.set_pending_activation(state.surface.id());
@@ -1936,6 +1976,9 @@ impl PlatformWindow for WaylandWindow {
 
     fn draw(&self, scene: &Scene) {
         let mut state = self.borrow_mut();
+        if !super::frame_loop::admit_draw(self.0.frame_loop.get(), &mut state.redraw_requested) {
+            return;
+        }
 
         if state.renderer.device_lost() {
             let raw_window = RawWindow {
@@ -1965,7 +2008,26 @@ impl PlatformWindow for WaylandWindow {
             let callback = state.surface.frame(&state.globals.qh, state.surface.id());
             state.pending_frame_callback = Some(callback);
         }
-        if state.renderer.draw(scene) {
+        let presented = if let WaylandSurfaceState::Xdg(xdg) = &state.surface_state {
+            let surface = xdg.xdg_surface.clone();
+            let geometry = state.xdg_geometry();
+            let WaylandWindowState {
+                renderer,
+                last_presented_geometry,
+                ..
+            } = &mut *state;
+            // WGPU resizing is complete. Stage logical geometry at the actual
+            // draw boundary; rollback on failure before a state-only retry commit.
+            super::geometry::draw_with_geometry(
+                last_presented_geometry,
+                geometry,
+                |[x, y, width, height]| surface.set_window_geometry(x, y, width, height),
+                || renderer.draw(scene),
+            )
+        } else {
+            state.renderer.draw(scene)
+        };
+        if presented {
             state.presentation = PresentationState::Presented;
             self.0.frame_loop.set(FrameLoop::AwaitingCallback);
         } else {
@@ -2294,21 +2356,19 @@ fn compute_outer_size(
     new_size: Option<Size<Pixels>>,
     tiling: Tiling,
 ) -> Option<Size<Pixels>> {
-    new_size.map(|mut new_size| {
-        if !tiling.top {
-            new_size.height += inset;
-        }
-        if !tiling.bottom {
-            new_size.height += inset;
-        }
-        if !tiling.left {
-            new_size.width += inset;
-        }
-        if !tiling.right {
-            new_size.width += inset;
-        }
-
-        new_size
+    new_size.map(|new_size| Size {
+        width: px(super::geometry::resize_axis(
+            f32::from(new_size.width),
+            f32::from(inset),
+            tiling.left,
+            tiling.right,
+        )),
+        height: px(super::geometry::resize_axis(
+            f32::from(new_size.height),
+            f32::from(inset),
+            tiling.top,
+            tiling.bottom,
+        )),
     })
 }
 

@@ -552,7 +552,7 @@ impl WaylandClientStatePtr {
     /// Queue a retry tick for `surface_id` one refresh interval from now. An immediate
     /// retry would spin against the frame-rate throttle that deferred the draw in the
     /// first place.
-    pub fn schedule_frame_retry(&self, surface_id: &ObjectId) {
+    pub fn schedule_frame_retry(&self, surface_id: &ObjectId) -> bool {
         let client = self.get_client();
         let state = client.borrow();
         let surface_id = surface_id.clone();
@@ -568,6 +568,9 @@ impl WaylandClientStatePtr {
             },
         ) {
             log::error!("Failed to schedule frame retry: {err}");
+            false
+        } else {
+            true
         }
     }
 
@@ -1554,7 +1557,11 @@ pub(crate) fn get_window(
     state: &mut RefMut<WaylandClientState>,
     surface_id: &ObjectId,
 ) -> Option<WaylandWindowStatePtr> {
-    state.windows.get(surface_id).cloned()
+    state
+        .windows
+        .get(surface_id)
+        .filter(|window| !window.is_closed())
+        .cloned()
 }
 
 impl Dispatch<wl_surface::WlSurface, ()> for WaylandClientStatePtr {
@@ -2308,12 +2315,19 @@ impl Dispatch<wl_pointer::WlPointer, ()> for WaylandClientStatePtr {
                 }
                 let button = linux_button_to_gpui(button);
                 let Some(button) = button else { return };
-                if state.mouse_focused_window.is_none() {
+                let Some(original) = state.mouse_focused_window.clone() else {
+                    return;
+                };
+                if original.is_blocked() {
                     return;
                 }
                 match button_state {
                     wl_pointer::ButtonState::Pressed => {
-                        if let Some(window) = state.keyboard_focused_window.clone() {
+                        if let Some(window) = super::pointer::ime_target(
+                            state.keyboard_focused_window.clone(),
+                            &original,
+                            |a, b| a.ptr_eq(b),
+                        ) {
                             if state.composing && state.text_input.is_some() {
                                 drop(state);
                                 // text_input_v3 don't have something like a reset function
@@ -2330,6 +2344,15 @@ impl Dispatch<wl_pointer::WlPointer, ()> for WaylandClientStatePtr {
                                 state = client.borrow_mut();
                             }
                         }
+                        let Some(position) = super::pointer::press_position(
+                            &original,
+                            state.mouse_focused_window.as_ref(),
+                            state.mouse_location,
+                            |a, b| a.ptr_eq(b),
+                            |window| !window.is_blocked(),
+                        ) else {
+                            return;
+                        };
                         let click_elapsed = state.click.last_click.elapsed();
 
                         if click_elapsed < DOUBLE_CLICK_INTERVAL
@@ -2337,10 +2360,7 @@ impl Dispatch<wl_pointer::WlPointer, ()> for WaylandClientStatePtr {
                                 .click
                                 .last_mouse_button
                                 .is_some_and(|prev_button| prev_button == button)
-                            && is_within_click_distance(
-                                state.click.last_location,
-                                state.mouse_location.unwrap(),
-                            )
+                            && is_within_click_distance(state.click.last_location, position)
                         {
                             state.click.current_count += 1;
                         } else {
@@ -2349,21 +2369,19 @@ impl Dispatch<wl_pointer::WlPointer, ()> for WaylandClientStatePtr {
 
                         state.click.last_click = Instant::now();
                         state.click.last_mouse_button = Some(button);
-                        state.click.last_location = state.mouse_location.unwrap();
+                        state.click.last_location = position;
 
                         state.button_pressed = Some(button);
 
-                        if let Some(window) = state.mouse_focused_window.clone() {
-                            let input = PlatformInput::MouseDown(MouseDownEvent {
-                                button,
-                                position: state.mouse_location.unwrap(),
-                                modifiers: state.modifiers,
-                                click_count: state.click.current_count,
-                                first_mouse: state.enter_token.take().is_some(),
-                            });
-                            drop(state);
-                            window.handle_input(input);
-                        }
+                        let input = PlatformInput::MouseDown(MouseDownEvent {
+                            button,
+                            position,
+                            modifiers: state.modifiers,
+                            click_count: state.click.current_count,
+                            first_mouse: state.enter_token.take().is_some(),
+                        });
+                        drop(state);
+                        original.handle_input(input);
                     }
                     wl_pointer::ButtonState::Released => {
                         state.button_pressed = None;
