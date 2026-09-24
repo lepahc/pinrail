@@ -1,5 +1,16 @@
 # Executed local verification
 
+## Correction: headless is not CPU-only
+
+The historical standalone **439-test** invocation below was real and passed, but
+its CPU-only/no-GPU characterization was incorrect. Three `wgpu_atlas` tests call
+`request_adapter` and `request_device` even without display variables. That run
+must not be described as CPU-only or as proof that no GPU-device work occurred.
+The current standalone driver and trusted CI command list explicitly exclude
+those three full test names. Future upstream test additions require review under
+the existing exact-source inventory gate. This correction does not replace the
+historical logs or claim native compositor/presentation qualification.
+
 ## Integrated reviewed-source route
 
 Controller code and reviewed baselines tested at
@@ -172,7 +183,7 @@ Non-Linux compilation and real compositor/GPU execution remain unverified.
 | Linux `test --locked --lib` | GPUI 359, Linux platform 42, wgpu support 38: **439 passed**, zero failures/ignored/filtered |
 | Source/lock after check and tests | Tracked tree unchanged; reviewed lock bytes unchanged |
 | Resource boundary | systemd user unit, MemoryMax 10G, MemoryHigh 8G, CPUQuota 200%, TasksMax 512; Cargo jobs/test threads 2 |
-| Headless boundary | DISPLAY/WAYLAND_DISPLAY/WAYLAND_SOCKET unset; no GUI example or GPU-device test executed |
+| Historical headless boundary | Display variables unset; no GUI example launched, but three GPU-device tests ran; see correction above |
 
 The build used Rust/Cargo **1.98.1**, a fresh worktree-private target directory,
 disk-backed short TMPDIR, and dev/test debug information disabled. The bounded
@@ -291,4 +302,5 @@ Historical paths relative to `/home/chapel/Projects/pinrail-resolve` unless note
   is `.scratch/target`, temporary files are `.scratch/tmp`.
 
 No GitHub writes, credentials, consumer modifications, runtime patch adoption,
-GUI/GPU execution, crate publication or complete license clearance are included.
+live GUI launch, crate publication or complete license clearance are included.
+Historical GPU-device execution is explicitly identified in the correction above.

@@ -101,6 +101,8 @@ The exact head must contain B as an ancestor; strict up-to-date checks remain
 necessary at merge time. The commands match the qualified Linux profile, use two
 Cargo jobs/test threads and disable dev/test debug information. A passing native
 check is not GPU/compositor, other-platform or application qualification.
+The three `wgpu_atlas` tests that request actual adapters/devices are explicitly
+excluded by full test name; removing display variables alone is not CPU isolation.
 Compilation can execute candidate build scripts; never move it into a write-token
 job. No display is connected and no GUI program is deliberately launched.
 

@@ -330,7 +330,9 @@ directory, two Cargo jobs/test threads, and disables dev/test debug information
 for bounded memory/disk use. It retains separate command output and `results.json`.
 Linux native development libraries (pkg-config, fontconfig, xkbcommon/X11/Wayland,
 OpenSSL and the corresponding compiler/linker tools) must already be installed.
-Headless tests use GPUI's test platform or pure protocol/shader validation; this
+The CPU-only test profile explicitly skips the three `wgpu_atlas` tests that
+request actual adapters/devices. Removing display variables alone does not stop
+GPU access. Remaining tests use the test platform or pure protocol/shader validation; this
 is **not compositor, window, pixel, GPU-device, or non-Linux execution proof**.
 
 This controller has no credentials or repository-protection authority. A caller

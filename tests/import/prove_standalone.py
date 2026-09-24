@@ -85,10 +85,14 @@ def main():
         packages = ['-p', 'gpui', '-p', 'gpui_platform', '-p', 'gpui_linux', '-p', 'gpui_wgpu']
         cargo('check', 'check', '--locked', *packages, '--all-targets', '--features', 'gpui/test-support')
         cargo('workspace-check', 'check', '--locked', '--workspace', '--all-targets', '--features', 'gpui/test-support')
-        # These libraries use GPUI's TestPlatform / pure protocol and shader tests,
-        # not a real compositor, renderer device or application event loop.
+        # Most cases use TestPlatform / pure protocol and shader validation.
+        # Three atlas cases request actual GPU adapters/devices without a display;
+        # explicitly exclude them from the CPU-only profile.
         cargo('test', 'test', '--locked', '-p', 'gpui', '-p', 'gpui_linux', '-p', 'gpui_wgpu',
-              '--lib', '--features', 'gpui/test-support', '--', '--test-threads=2')
+              '--lib', '--features', 'gpui/test-support', '--', '--test-threads=2',
+              '--skip', 'wgpu_atlas::tests::before_frame_skips_uploads_for_removed_texture',
+              '--skip', 'wgpu_atlas::tests::remove_deallocates_tile_space_for_reuse',
+              '--skip', 'wgpu_atlas::tests::reused_texture_id_has_new_generation')
         im.require(not im.git(worktree, 'status', '--porcelain', '--untracked-files=no'), 'build changed tracked source')
         results['status'] = 'passed'
     except Exception as error:
