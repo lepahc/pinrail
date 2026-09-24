@@ -110,8 +110,12 @@ There is no arbitrary destination URL argument and no GitHub write operation.
 
 The last stdout line is machine-readable JSON with `candidate`, `base`, `tree`,
 `upstream`, `controller`, `candidate_repo`, `noop`, `log`, `files`, `packages`, and
-`scope`. The same object is saved as `migration/result.json`. Errors exit nonzero;
-Copybara logs remain in `migration/copybara.log`. `migration/input-audit.json`
+`scope`. Checkpoint-only recovery additionally reports `checkpoint_update: true`
+(and `noop: false`) with `checkpoint_log`; otherwise those fields are `false`
+and `null`. The same object is saved as `migration/result.json`. Errors exit
+nonzero; the initial Copybara log remains in `migration/copybara.log` and a gated
+recovery has its own `migration/checkpoint-copybara.log` and
+`migration/checkpoint-command.json`. `migration/input-audit.json`
 records literal include edges, generated include exceptions, native resource
 inputs, and external SDK/tool requirements.
 
@@ -223,6 +227,29 @@ native marker with the recomputed marker. Preserve both labels and merge ancestr
 when accepting candidates. Merge-commit acceptance and later resumption were
 executed in the local proof; squash/rebase acceptance is not the supported proof.
 
+An **excluded-only checkpoint advance is not an output no-op**: selected source
+stays unchanged, but the reviewed pin in `README.md` and `PINRAIL_IMPORT.json`
+must advance. The normal Copybara invocation runs first. Only after exit 4, no
+candidate, and its exact empty-origin-range diagnostic may the controller run
+Copybara once more with `--force`. Recovery requires all of the following:
+
+- The old accepted tree and both committed pin baselines passed normal validation.
+- The requested pin is new, and the complete reviewed inventories differ only in
+  `upstream` (including identical raw inputs, selection, dependencies and policy).
+- Output outside the two checkpoint files is unchanged; README changes only its
+  pin, and the receipt changes only `upstream`, `reviewed_baseline_sha256`, and
+  `inventory_sha256`. Excluded editor changes do not authorize policy/config drift.
+- Both the previous requested checkpoint and native Copybara resumption revision
+  are ancestors of the new pin, proven by a separate blobless depth-256 fetch.
+  Missing ancestry, including history outside this bound, fails closed.
+
+The recovery must exit successfully and produce a direct-child candidate with
+exact expected bytes/modes/paths and valid native/raw-source equivalence. Errors
+are not retried, and no provenance marker is manually edited. For this forced
+checkpoint, Copybara writes the requested pin as its native resumption marker;
+the next merged same-pin retry is an ordinary verified no-op without `--force`.
+There is no user-facing force/drift-bypass switch.
+
 `check_last_rev_state` is disabled because a pin-specific generated receipt cannot
 be reconstructed using the next pin's constant transformation. Before invoking
 Copybara, this controller instead recomputes and checks the *entire accepted base*
@@ -238,11 +265,20 @@ import/run --help
 .scratch/venv/bin/python tests/import/prove_local.py \
   --scratch .scratch/new-proof-root \
   --jar /absolute/path/to/verified/copybara_deploy.jar
+.scratch/venv/bin/python tests/import/prove_checkpoint.py \
+  --scratch .scratch/new-checkpoint-proof-root \
+  --jar /absolute/path/to/verified/copybara_deploy.jar
 ```
 
-The end-to-end command performs public upstream reads and local Git writes only.
-It retains per-step stdout/stderr, Copybara logs and `proofs.json`, uses real bare
-repositories/worktrees, and fails on the first failed acceptance criterion.
+The end-to-end commands perform public upstream reads and local Git writes only.
+They retain per-step stdout/stderr, Copybara logs and `proofs.json`, use real bare
+repositories/worktrees, and fail on the first failed acceptance criterion.
+The focused checkpoint proof exercises a selected update, an excluded-only
+advance, clean recomputation, merge acceptance, and same-pin retry. Its extra
+native-pin baseline exists only in a disposable controller clone after checking
+full input equality with the committed checkpoint baseline; it never approves a
+new production baseline. An optional `--discovery-cache` copies an existing
+cache read-only to save discovery traffic; pinned raw blobs are still verified.
 
 ### CPU-only standalone qualification
 

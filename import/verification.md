@@ -1,15 +1,77 @@
 # Executed local verification
 
-Importer code tested at `1643f4dcc0200d455228288b59231a979225c157`.
-Documentation and test-driver changes do not change the importer-code digest.
-These are private local candidates, not published branch refs or build releases.
+The following are historical proofs of the separate checkpoint and standalone
+lanes, before their controller integration. Their artifact identities and counts
+are not claims about the newly integrated controller. These are local candidates,
+not published branch refs or build releases.
+
+## Checkpoint-only regression
+
+The focused regression used the real checksum-verified Copybara v20260921 JAR,
+not a fabricated migration response. Historical checkpoint controller-code digest:
+`c388a4898c0536290b54069f032ca9bbb65370550c0f54848eed031c75849afb`.
+All three controller files were byte-compared with the tested fixture afterward.
+
+**Observed RED:** `tests/import/prove_checkpoint.py` against the pre-fix source
+successfully imported and merge-accepted a selected-input update to
+`d528c665e1a5c4627a68813435756592d9fad69d`. Advancing to
+`2c4bc2d7b2c5b7832ad964f39840d823d961cb0e` then failed with an exact-tree mismatch
+for `PINRAIL_IMPORT.json` and `README.md`. Copybara reported no origin-file changes
+and skipped the transforms. The failed command exited 1; logs are retained at
+`.scratch/checkpoint-red2.log` and `.scratch/checkpoint-red2/checkpoint/migration/`.
+An earlier harness-only cache-copy permission failure is not counted as RED.
+
+**Observed GREEN:** the same regression passed with bounded checkpoint recovery:
+
+- Real initial import, selected-input update, and merge acceptance.
+- Ordinary empty-range invocation followed by exactly one gated `--force` run.
+- Only `PINRAIL_IMPORT.json` and `README.md` changed. Both provenance markers were
+  written through Copybara at the requested checkpoint; raw source, full output
+  tree, and direct candidate ancestry passed their normal checks.
+- Clean `verify` recomputation produced the same Git tree and native provenance.
+- Merge acceptance followed by an ordinary same-pin no-op: no force, new commit,
+  or candidate ref.
+- **20 unit tests passed** (the original 11 retained). New recovery tests cover
+  exit/diagnostic errors, transform and selection-policy drift, unreviewed inputs,
+  tampered accepted bases, unrelated checkpoint/native history, bounded recovery
+  failure, and final candidate parent/provenance/tree rejection. Java faults are
+  injected at the process boundary in these unit tests; Git and committed approval
+  checks execute. A separate native-ancestry RED caught a force attempt for an
+  unrelated native marker before the second ancestry check was added.
+- Additional real-JAR fault probes rejected invalid generated Starlark (exit 2)
+  and a checkpoint-only `Cargo.toml` transform drift after a real empty-origin
+  exit. Neither wrote a forced command, candidate ref, or success receipt. These
+  probes inject only config/transform output, not a fake Copybara process result.
+
+Exact final local artifacts:
+
+| Artifact | SHA |
+|---|---|
+| Disposable reviewed fixture controller | `75b2e01d640c025925866deae4bbaf5f1bc290d4` |
+| Selected-update accepted merge | `83fcdc9b3d9ec0f8c080bbff92f258a213471bcc` |
+| Checkpoint candidate | `9e395008d0487092a72ef892116aa28c47a500d4` |
+| Clean recomputed candidate | `16fa523ad6f1c27f5390fae624945eedf3dc671a` |
+| Shared checkpoint Git tree | `f6209d195937a4b9d77a0e0222908c6d7edb67b8` |
+| Accepted checkpoint / same-pin no-op | `0d67908d6180e72c0a3d989787db80089b7edb85` |
+
+Evidence is in the checkpoint-fix worktree's ignored
+`.scratch/checkpoint-green-final/proofs.json`, per-step migration logs/commands,
+`.scratch/checkpoint-unit-final2.log`, and
+`.scratch/checkpoint-native-ancestry-red.log`. Real negative probes and results:
+`.scratch/probe-checkpoint-negatives.py` and
+`.scratch/checkpoint-green-final/negative-proofs.json`.
+The native-pin review was created only in the disposable fixture controller after
+checking equality with the committed checkpoint inventory; no production baseline
+was added. This repair did not rerun the older downstream-merge/Cargo proofs below,
+perform a Rust build, or change the deliberate controller-upgrade drift boundary.
 
 ## Standalone result
 
-The generated extraction now **resolves, compiles, and passes Linux headless
-library tests**, without acquiring editor-only root patches or changing the
-selected dependency versions/sources/checksums. No runtime source patches were
-made. Non-Linux compilation and real compositor/GPU execution remain unverified.
+Importer code tested at `1643f4dcc0200d455228288b59231a979225c157`.
+The generated extraction **resolves, compiles, and passes Linux headless library
+tests**, without acquiring editor-only root patches or changing the selected
+dependency versions/sources/checksums. No runtime source patches were made.
+Non-Linux compilation and real compositor/GPU execution remain unverified.
 
 | Check | Actual outcome |
 |---|---|
@@ -117,7 +179,7 @@ transformation, was verified at those two revisions.
 
 ## Retained evidence
 
-Paths relative to this controller worktree unless noted:
+Historical paths relative to `/home/chapel/Projects/pinrail-resolve` unless noted:
 
 - `.scratch/proof-resolution/proofs.json`: regenerated real migration, no-op,
   merge-resumption, source-patch survival, and malicious candidate receipts.
