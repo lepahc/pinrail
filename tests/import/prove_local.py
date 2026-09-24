@@ -101,6 +101,8 @@ def main():
     updated = cli('update-after-merge', 'import', CURRENT, accepted, prior_accepted)
     assert not updated['noop'] and updated['tree'] != first['tree']
     current_accepted = accept(updated, prior_accepted)
+    current_repeat = cli('repeat-current', 'import', CURRENT, accepted, current_accepted)
+    assert current_repeat['noop'] and current_repeat['candidate'] == current_accepted
     im.git(downstream, 'merge', '--no-ff', current_accepted, '-m', 'Integrate accepted GPUI import')
     assert source.read_bytes().startswith(marker)
     assert json.loads((downstream / im.RECEIPT).read_text())['upstream'] == CURRENT

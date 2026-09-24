@@ -21,11 +21,13 @@ class NoticeTests(unittest.TestCase):
             def read(self, name):
                 return {
                     'Cargo.toml': b'[workspace]\nmembers=[]\n[workspace.dependencies]\n',
+                    'Cargo.lock': b'version = 4\npackage = []\n',
                     'crates/gpui/Cargo.toml': b'[package]\nname="gpui"\n[[example]]\nname="svg"\npath="examples/svg/svg.rs"\n',
                 }[name]
         inventory = {'upstream': 'a' * 40, 'package_dirs': [], 'workspace_dependencies': [],
                      'license_findings': [], 'audit_limits': 'test fixture'}
-        return im.generated_files(inventory, Inputs(), 'b' * 64, 'c' * 64)
+        return im.generated_files(inventory, Inputs(), 'b' * 64, 'c' * 64,
+                                  b'version = 4\npackage = []\n')
 
     def test_generated_tree_carries_pinned_microsoft_permission_text(self):
         generated = self.generated()
