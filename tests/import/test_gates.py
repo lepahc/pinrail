@@ -87,9 +87,18 @@ class GateTests(unittest.TestCase):
             changed['dependencies'].append('unapproved')
             filename.write_bytes(im.canonical({**record, 'inventory': changed}))
             with patch.object(im, 'ROOT', repo):
-                im.baseline(controller, rev, old)
+                _, accepted_lock = im.baseline(controller, rev, old)
+                self.assertEqual(accepted_lock, lock)
+                lock_path.write_bytes(b'candidate/working-tree lock cannot authorize itself')
+                self.assertEqual(im.baseline(controller, rev, old)[1], lock)
                 with self.assertRaises(im.GateError):
                     im.baseline(controller, rev, changed)
+                # Even a committed replacement needs the separately reviewed hash.
+                im.git(repo, 'add', str(lock_path.relative_to(repo)))
+                im.git(repo, 'commit', '-m', 'Replace lock without changing approval')
+                changed_controller = im.git(repo, 'rev-parse', 'HEAD').decode().strip()
+                with self.assertRaisesRegex(im.GateError, 'projected lock differs'):
+                    im.baseline(changed_controller, rev, old)
 
     def test_cargo_closure_includes_renamed_optional_target_build_dev_and_patches(self):
         raw = {

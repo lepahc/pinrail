@@ -33,8 +33,11 @@ separate review tasks. A private test baseline is not legal clearance.
 ## Prerequisites and tool pins
 
 Linux, Bash, Git, Python with `tomllib` (3.11+), `uv`, and Java are required.
-Execution was tested with Python 3.12.12 and Java 26. No Rust compilation is
-performed by the importer. `import/run` bootstraps a private environment with
+Execution was tested with Python 3.12.12 and Java 26. No Rust compilation or
+dependency resolution is performed by the import/verify commands. Cargo lock
+preparation and standalone qualification use **Rust/Cargo 1.98.1** explicitly
+(`cargo +1.98.1`, avoiding automatic installation of other upstream targets).
+`import/run` bootstraps a private environment with
 hash-pinned `tomlkit==0.13.3`.
 
 Copybara is **v20260921**, source
@@ -69,14 +72,18 @@ import/run discover \
 `inspect` is an alias. The output contains exact upstream object IDs/modes for
 all selected and intentionally omitted files; dependency edges and feature
 specifications; all target/dev/build/optional path closure; package declarations;
-root patches; locked external source identities; input classes; and known
+root patches; the all-platform pinned lock cohort and selected/omitted patches;
+locked external source identities; input classes; and known
 separately licensed assets/tools. Discovery cannot overwrite files or write into
 `import/` and **cannot approve an inventory**.
 
 Review an inventory independently, compare it with the previous controller
 baseline, and commit the reviewed envelope at `import/baselines/<upstream>.json`.
 The envelope requires `scope: "private-evaluation-only"`, a nonempty `review`,
-and the exact `inventory` value. There is intentionally no approval command.
+the exact `inventory` value, and `cargo_lock_sha256` for the reviewed standalone
+lock committed at `import/locks/<upstream>.lock`. Both baseline and lock are read
+from the **specified controller commit**, never from the candidate or a dirty
+working-tree replacement. There is intentionally no approval command.
 Any changed file, mode, dependency, source, feature, manifest, license notice,
 lockfile, or native input causes comparison against the committed baseline to
 fail. A new source revision always requires a new explicit controller review.
@@ -151,13 +158,43 @@ TOML-aware transformations retain workspace package inheritance and lints, reduc
 members/default-members/inherited dependency definitions, and remove only the
 SVG example target from its member manifest. Other member manifests are intact.
 
-The entire upstream `Cargo.lock` and **all root patch definitions** are preserved;
-no Cargo resolver or dependency update runs in the import path. This is deliberately
-conservative: Cargo may fetch even unused root Git patches (for example livekit)
-before resolving. `cargo metadata --no-deps --locked` passed, but full offline
-metadata was blocked by an uncached `libwebrtc` root patch. Do not silently fix
-that by running an unlocked resolver. A narrower patch/lock projection needs its
-own reviewed transformation and version/source-equivalence proof.
+Cargo eagerly acquires even unused root Git patches. The importer now walks the
+**original Cargo.lock graph from every selected path package**, without a host
+target/feature filter. It retains patches only when their package and exact Git
+source are in that pinned graph (path patches remain selected workspace members).
+For both reviewed snapshots this retains `async-process`, `async-task`,
+`windows-capture`, `calloop`, and `scratch`; it omits `tree-sitter-language`,
+`livekit`, `libwebrtc`, `notify`, `notify-types`, and `webrtc-sys`. In particular,
+Windows patches are not removed merely because qualification runs on Linux.
+
+The whole upstream lock with these relevant patches was tried first: full
+`cargo metadata --locked` rejected it as needing an update. A simple lock graph
+slice was also insufficient because Cargo prunes upstream feature-union edges.
+The checked-in standalone locks were therefore produced by **Cargo 1.98.1
+metadata**, seeded with the exact upstream lock. This was pruning, not a fresh
+`generate-lockfile`, `cargo update`, or a latest-version resolution.
+
+The original reachable graph contains 894 identities; the Cargo-pruned lock has
+875. Every retained name/version/source/checksum and every retained dependency
+edge must exist in the original lock; all selected local packages must remain.
+Changed or new identities, edges, ambiguous lock references, missing path packages,
+and unknown patch forms fail closed. The same generated lock bytes apply to both
+reviewed pins; their distinct original full locks remain independently inventoried.
+Full all-feature, all-platform `cargo metadata --locked` resolved all 875 packages
+with 27 workspace members. This is not merely `--no-deps` metadata.
+
+For a new pin, prepare a proposed lock only in a disposable **actual Git worktree
+of a Copybara-generated candidate**, with the new pin's selected manifests and
+relevant root patches. Seed `Cargo.lock` from that exact pin. Run
+`cargo +1.98.1 metadata --offline --format-version 1` to let Cargo prune the seeded
+lock (missing cached package downloads can stop metadata after writing the lock).
+Compare the complete result using `validate_lock_projection` against the original
+lock and `cargo_projection` from the new pinned inputs; any identity/edge change
+is a blocker, not permission to update. Only then allow downloads with full
+`cargo +1.98.1 metadata --locked --all-features --format-version 1` and review the
+result and lock diff. Commit the proposed lock and its reviewed baseline hash
+together. Neither discovery nor import automatically approves this input.
+Normal imports execute no resolver: they install those trusted, checked bytes.
 
 The resource audit checks literal Rust includes, manifest target/readme/license
 paths, five known native build scripts and their cross-crate shader/resource
@@ -206,6 +243,41 @@ import/run --help
 The end-to-end command performs public upstream reads and local Git writes only.
 It retains per-step stdout/stderr, Copybara logs and `proofs.json`, uses real bare
 repositories/worktrees, and fails on the first failed acceptance criterion.
+
+### CPU-only standalone qualification
+
+`tests/import/prove_standalone.py` verifies the exact candidate tree against the
+trusted controller, creates a fresh actual Git worktree, then runs full locked
+all-feature metadata, Linux all-target checks for `gpui`, `gpui_platform`,
+`gpui_linux`, and `gpui_wgpu`, a full-workspace Linux all-target check, and library
+tests for `gpui`, `gpui_linux`, and `gpui_wgpu`. It checks the complete metadata
+identity set against the reviewed
+lock, forbids path dependencies outside that worktree, and checks that Cargo did
+not modify the lock or tracked source. It does not execute GUI examples.
+
+Invoke it under the resource boundary (replace uppercase placeholders):
+
+```sh
+systemd-run --user --wait --pipe --collect \
+  -p MemoryMax=10G -p MemoryHigh=8G -p CPUQuota=200% -p TasksMax=512 \
+  --working-directory="$PWD" \
+  env -u DISPLAY -u WAYLAND_DISPLAY -u WAYLAND_SOCKET \
+  CARGO_BUILD_JOBS=2 TMPDIR="$PWD/.scratch/tmp" \
+  .scratch/venv/bin/python tests/import/prove_standalone.py \
+  --upstream FULL_UPSTREAM_SHA --controller-rev FULL_CONTROLLER_SHA \
+  --candidate-repo /absolute/path/to/migration/destination.git \
+  --candidate-sha FULL_CANDIDATE_SHA \
+  --worktree /absolute/path/to/new-short-worktree \
+  --scratch .scratch/standalone
+```
+
+The driver uses a worktree-private target directory and disk-backed temporary
+directory, two Cargo jobs/test threads, and disables dev/test debug information
+for bounded memory/disk use. It retains separate command output and `results.json`.
+Linux native development libraries (pkg-config, fontconfig, xkbcommon/X11/Wayland,
+OpenSSL and the corresponding compiler/linker tools) must already be installed.
+Headless tests use GPUI's test platform or pure protocol/shader validation; this
+is **not compositor, window, pixel, GPU-device, or non-Linux execution proof**.
 
 This controller has no credentials or repository-protection authority. A caller
 must choose a trusted controller SHA and accepted base outside the candidate;
