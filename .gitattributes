@@ -1,0 +1,2 @@
+# Preserve the exact pinned upstream license bytes, including CRLF.
+docs/licenses/microsoft-terminal-MIT.txt -text whitespace=cr-at-eol

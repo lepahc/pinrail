@@ -12,6 +12,18 @@
 - Retain upstream OFL fonts and the MPL-2.0 `cbindgen` macOS build dependency
   under their existing licenses, with applicable notices. Exclude the separately
   licensed CC BY-SA 3.0 dragon SVG example and its asset.
+- Start with the basic engine correctness series: retry-registration recovery,
+  XDG content-size/presentation ordering, pointer/IME reentry safety, and
+  applicable safeguards for existing layer-shell APIs. Defer retained-layer
+  transitions, custom capture, serial-free clipboard, and component changes.
+- Use a trusted-`main` Actions route rather than allowing an import candidate to
+  provide its own authoritative checker. Repository enforcement must still be
+  exercised and verified before being called installed.
+- Land the reviewed source snapshots into `lepahc/pinrail`, carrying the adopted
+  source notices and exact inventories. This is narrow source-import authority,
+  not complete third-party/license clearance or a legal guarantee. The controller
+  requires explicit `--source-import` and committed `reviewed-source-import`
+  scope; private evaluation remains a separate mode.
 - Do not migrate consumers, publish packages/releases, schedule automatic
   upstream advancement, buy services, create broad credentials, or launch on
   the live desktop as part of this bootstrap.
@@ -46,10 +58,11 @@ These choices must be backed by executed results before being called working.
 
 ## Unresolved until inventory and verification
 
-- Exact retained framework patch manifest, including upstream-superseded fixes
-  and porting of optional layer-shell, capture and clipboard capabilities.
-- Separate disposition of `gpui-component` changes. They are not automatically
-  part of this GPUI engine distribution or compatible with a newer GPUI cohort.
+- Applicability, implementation and regression evidence for the adopted basic
+  patch groups; see `patch-manifest.md`. Upstream-superseded fixes are not copied.
+- Any future adoption of the explicitly deferred retained-layer, capture,
+  clipboard or component capabilities. `gpui-component` is not automatically
+  part of this engine distribution or compatible with a newer GPUI cohort.
 - New or changed licenses, dependencies, assets, build inputs and native SDK
   requirements beyond the specifically approved inputs above.
 - Actual build/test and compositor evidence for each platform and capability.

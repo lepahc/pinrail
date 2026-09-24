@@ -1,0 +1,4 @@
+# Trusted CI pin exists before the first generated source is merged into main.
+[toolchain]
+channel = "1.98.1"
+profile = "minimal"
