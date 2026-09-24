@@ -1,6 +1,9 @@
 # Downstream patch inventory
 
-**Adoption status: awaiting a scope decision. No runtime group below is ported.**
+**Adopted bootstrap scope: G1, G2, G3 and applicable L1 safeguards.**
+These groups are selected for semantic porting onto current upstream APIs; their
+implementation and verification status is recorded separately. Retained-layer,
+capture, no-focus clipboard and component features are explicitly deferred.
 
 The donor is the locally modified published GPUI 0.2.2 and gpui-component 0.5.1
 cohort at See Hear Think revision `82dbebecf43e1830f44f062011ea6017b0a33dfc`.
@@ -30,7 +33,7 @@ Do not copy these implementations over current upstream:
 - **U4:** basic layer-shell creation and input regions. Current
   `WindowKind::LayerShell` is partial overlap, not retained hide/remap equivalence.
 
-## Recommended initial correctness series — not yet adopted
+## Adopted initial correctness series — implementation under verification
 
 - **G1 — retry-registration failure recovery.** Recover one coalesced wake if
   calloop rejects retry-timer admission. Preserve current failed-presentation
@@ -49,7 +52,7 @@ Do not copy these implementations over current upstream:
   cleanup. Generalize onto current upstream APIs instead of imposing donor HUD
   defaults. Coverage intent: `gpui_wayland_contract`, `recorder_layer_protocol`.
 
-## Optional platform capabilities — decision required
+## Deferred optional platform capabilities — not part of bootstrap
 
 - **L2 + L3 + R1 — retained interactive layers.** Dynamic options, suspend/remap,
   generation-fenced configure/resize cancellation, stacking replay and exact
@@ -69,7 +72,7 @@ Do not copy these implementations over current upstream:
   behavior, retaining default-off/nonblocking diagnostics. Public diagnostic APIs
   and environment names are not automatically adopted.
 
-## Component library — separate source and cohort
+## Deferred component library — separate source and cohort
 
 No component package is part of the generated Zed import. Before adopting it,
 select its own baseline and resolve a single coherent GPUI dependency cohort.
