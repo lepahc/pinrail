@@ -407,7 +407,7 @@ def ensure_jar(path, scratch):
 
 
 def config_text(inventory, generated, destination):
-    writes = '\n'.join(f'    ctx.write_path(ctx.new_path({json.dumps(name)}), {json.dumps(data.decode())})'
+    writes = '\n'.join(f'    ctx.write_path(ctx.new_path({json.dumps(name)}), {json.dumps(data.decode(), ensure_ascii=False)})'
                        for name, data in generated.items())
     return f'''# Generated from the trusted controller, never read from the candidate.
 def standalone(ctx):
