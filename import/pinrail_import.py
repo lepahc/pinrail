@@ -222,6 +222,116 @@ def resolve_closure(source):
     return root, packages, edges, sorted(used)
 
 
+def package_identity(package):
+    return (package['name'], package['version'], package.get('source'), package.get('checksum'))
+
+
+def lock_index(lock):
+    packages = lock['package']
+    by_name = {}
+    identities = {package_identity(p): p for p in packages}
+    require(len(identities) == len(packages), 'duplicate locked package identity')
+    for package in packages:
+        by_name.setdefault(package['name'], []).append(package)
+
+    def resolve(reference):
+        match = re.fullmatch(r'([^ ()]+)(?: ([^ ()]+))?(?: \((.+)\))?', reference)
+        if match is None:
+            raise GateError(f'unsupported locked dependency reference: {reference}')
+        name, version, origin = match.groups()
+        matches = [p for p in by_name.get(name, [])
+                   if (version is None or version == p['version']) and
+                   (origin is None or origin == p.get('source'))]
+        require(len(matches) == 1, f'missing/ambiguous locked dependency: {reference}')
+        return matches[0]
+    return identities, by_name, resolve
+
+
+def validate_lock_projection(original_bytes, projected_bytes, projection):
+    """Permit pruning only: no new identity/checksum or dependency edge."""
+    original = tomllib.loads(original_bytes.decode())
+    projected = tomllib.loads(projected_bytes.decode())
+    require(projected.keys() <= {'version', 'package'}, 'unreviewed projected lock sections')
+    require(projected.get('version') == original.get('version'), 'lock format version changed')
+    original_ids, _, original_ref = lock_index(original)
+    projected_ids, _, projected_ref = lock_index(projected)
+    allowed = {package_identity(p) for p in projection['locked_packages']}
+    require(projected_ids.keys() <= allowed, 'new/changed package version/source/checksum in projected lock')
+    required_local = {identity for identity in allowed if identity[2] is None}
+    require(required_local <= projected_ids.keys(), 'projected lock lost an in-tree package')
+    for identity, package in projected_ids.items():
+        old = original_ids[identity]
+        require({k: v for k, v in package.items() if k != 'dependencies'} ==
+                {k: v for k, v in old.items() if k != 'dependencies'}, 'projected package metadata changed')
+        old_deps = {package_identity(original_ref(d)) for d in old.get('dependencies', [])}
+        new_deps = {package_identity(projected_ref(d)) for d in package.get('dependencies', [])}
+        require(new_deps <= old_deps, f'new/changed locked dependency edge for {identity[0]}')
+    return projected
+
+
+def cargo_projection(source, package_dirs):
+    """Walk Cargo's pinned all-target lock graph; never select by host cfg/features.
+
+    Lock dependencies already encode aliases, build/dev/proc-macro dependencies,
+    optional dependencies and version/source disambiguation. This conservative
+    cohort can include external features enabled by other upstream members. Cargo
+    may prune those edges later, but it must not introduce any package identity.
+    """
+    root = tomllib.loads(source.read('Cargo.toml').decode())
+    require(not root.get('replace'), 'unreviewed Cargo replace policy')
+    lock = tomllib.loads(source.read('Cargo.lock').decode())
+    require(lock.get('version') in (3, 4), 'unsupported Cargo lock format')
+    _, by_name, resolve = lock_index(lock)
+    pending, local_names = [], set()
+    for directory in package_dirs:
+        package = tomllib.loads(source.read(directory + '/Cargo.toml').decode())['package']
+        version = package['version']
+        if isinstance(version, dict):
+            require(version == {'workspace': True}, 'unsupported workspace package version')
+            version = root['workspace']['package']['version']
+        candidates = [p for p in by_name.get(package['name'], []) if p['version'] == version and 'source' not in p]
+        require(len(candidates) == 1, f'in-tree package absent/ambiguous in lock: {directory}')
+        pending.append(candidates[0])
+        local_names.add(package['name'])
+    reached = {}
+    while pending:
+        package = pending.pop()
+        identity = package_identity(package)
+        if identity in reached:
+            continue
+        require('source' in package or package['name'] in local_names,
+                f'locked dependency escapes selected path closure: {package["name"]}')
+        reached[identity] = package
+        pending.extend(resolve(dep) for dep in package.get('dependencies', []))
+
+    kept, omitted = {}, {}
+    for registry, table in root.get('patch', {}).items():
+        for alias, spec in table.items():
+            require(isinstance(spec, dict), f'unsupported patch specification: {alias}')
+            name = spec.get('package', alias)
+            candidates = [p for p in reached.values() if p['name'] == name]
+            if 'path' in spec:
+                path = relative_path('', spec['path'])
+                require(path in package_dirs, f'patch outside selected source: {path}')
+                selected = any('source' not in p for p in candidates)
+            elif 'git' in spec:
+                refs = [k for k in ('rev', 'branch', 'tag') if k in spec]
+                require(len(refs) <= 1, f'ambiguous Git patch ref: {alias}')
+                # Ref values in the supported upstream are simple literal tokens.
+                # Unknown encodings must be reviewed, not guessed/normalized.
+                require(not refs or re.fullmatch(r'[A-Za-z0-9._/-]+', spec[refs[0]]),
+                        f'unsupported Git patch ref encoding: {alias}')
+                prefix = 'git+' + spec['git'] + (f'?{refs[0]}={spec[refs[0]]}' if refs else '') + '#'
+                selected = any(p.get('source', '').startswith(prefix) for p in candidates)
+            else:
+                raise GateError(f'unreviewed non-path/non-Git patch: {alias}')
+            (kept if selected else omitted).setdefault(registry, {})[alias] = spec
+    cohort = sorted(reached.values(), key=lambda p: (p['name'], p['version'], p.get('source', '')))
+    return {'kept_patches': kept, 'omitted_patches': omitted,
+            'locked_packages': [{k: p[k] for k in ('name', 'version', 'source', 'checksum') if k in p}
+                                for p in cohort]}
+
+
 def check_symlinks(entries, read):
     for name, entry in entries.items():
         if entry['mode'] != '120000':
@@ -265,7 +375,7 @@ def discover(rev, scratch):
     require(all(name in selected for name in ROOT_FILES), 'missing required root inputs')
     check_symlinks(selected, source.read)
     lock = tomllib.loads(source.read('Cargo.lock').decode())
-    # Full locked identities are retained, not a newly resolved subset.
+    # The original lock is an immutable authority; projection may only prune it.
     inventory = {
         'schema': 1, 'upstream': rev, 'origin': UPSTREAM, 'entry_packages': list(ENTRIES),
         'package_dirs': sorted(packages), 'extra_dirs': list(EXTRA_DIRS),
@@ -276,6 +386,7 @@ def discover(rev, scratch):
                      for d, m in sorted(packages.items())},
         'dependency_edges': edges, 'workspace_dependencies': used,
         'root_patches': root.get('patch', {}),
+        'cargo_projection': cargo_projection(source, sorted(packages)),
         'locked_sources': sorted({p['source'] for p in lock['package'] if 'source' in p}),
         'license_findings': [
             {'input': 'crates/gpui/examples/svg/dragon.svg', 'license': 'CC-BY-SA-3.0', 'role': 'OMITTED together with SVG example target/source'},
@@ -295,7 +406,10 @@ def baseline(controller, rev, inventory):
     require(review.get('scope') == 'private-evaluation-only', 'only private evaluation is currently authorized')
     require(review.get('review') and review.get('inventory') == inventory,
             f'unreviewed inventory/dependency/license/build input changes: {path}')
-    return hashlib.sha256(raw).hexdigest()
+    lock_bytes = git(ROOT, 'show', f'{controller}:import/locks/{rev}.lock')
+    require(hashlib.sha256(lock_bytes).hexdigest() == review.get('cargo_lock_sha256'),
+            'projected lock differs from reviewed baseline')
+    return hashlib.sha256(raw).hexdigest(), lock_bytes
 
 
 def trusted_controller(controller):
@@ -317,7 +431,7 @@ def omit_svg_example(data):
     return tomlkit.dumps(doc).encode()
 
 
-def generated_files(inventory, source, controller_digest, baseline_digest):
+def generated_files(inventory, source, controller_digest, baseline_digest, lock_bytes):
     # TOML parser/writer, not textual section surgery. Only the SVG target is removed.
     doc = tomlkit.parse(source.read('Cargo.toml').decode())
     ws = doc['workspace']
@@ -328,6 +442,18 @@ def generated_files(inventory, source, controller_digest, baseline_digest):
     for name in list(ws['dependencies']):
         if name not in inventory['workspace_dependencies']:
             del ws['dependencies'][name]
+    projection = cargo_projection(source, inventory['package_dirs'])
+    validate_lock_projection(source.read('Cargo.lock'), lock_bytes, projection)
+    if 'cargo_projection' in inventory:
+        require(projection == inventory['cargo_projection'], 'Cargo projection differs from reviewed inventory')
+    for registry in list(doc.get('patch', {})):
+        for alias in list(doc['patch'][registry]):
+            if alias not in projection['kept_patches'].get(registry, {}):
+                del doc['patch'][registry][alias]
+        if not doc['patch'][registry]:
+            del doc['patch'][registry]
+    if 'patch' in doc and not doc['patch']:
+        del doc['patch']
     receipt = {'schema': 1, 'upstream': inventory['upstream'], 'origin': UPSTREAM,
                'controller_code_sha256': controller_digest, 'reviewed_baseline_sha256': baseline_digest,
                'copybara': {'version': COPYBARA_VERSION, 'source': COPYBARA_SOURCE,
@@ -335,7 +461,9 @@ def generated_files(inventory, source, controller_digest, baseline_digest):
                'inventory_sha256': hashlib.sha256(canonical(inventory)).hexdigest(),
                'provenance_policy': 'GitOrigin-RevId is the exact requested snapshot. Copybara-Path-RevId is Copybara native path-affecting history/resumption; raw selected trees must be identical at both revisions.',
                'scope': 'private-evaluation-only', 'package_dirs': inventory['package_dirs'],
-               'lock_policy': 'Upstream Cargo.lock bytes and root patches preserved. No dependency re-resolution performed.',
+               'lock_policy': 'Reviewed all-platform Cargo lock pruning only. Every package version/source/checksum and dependency edge is checked against the original upstream lock. Root patches are restricted to that original selected cohort.',
+               'cargo_lock_sha256': hashlib.sha256(lock_bytes).hexdigest(),
+               'root_patches': projection['kept_patches'],
                'omitted_files': list(OMITTED),
                'license_findings': inventory['license_findings'], 'audit_limits': inventory['audit_limits']}
     readme = f'''# GENERATED UPSTREAM IMPORT — NOT THE CONSUMER BRANCH
@@ -360,12 +488,15 @@ external MPL-2.0 macOS build tool, retained by policy. See preserved notices and
 `{RECEIPT}`. No blanket permissive-only or complete license clearance is claimed.
 
 The root workspace membership and inherited dependency table were reduced;
-the GPUI SVG example target was removed. Other member manifests, root patches
-and upstream lock bytes were preserved.
-No Cargo dependency update was performed. Native compilation/SDK availability
+the GPUI SVG example target was removed. Other member manifests are preserved.
+Unreachable editor patches were omitted; the reviewed standalone lock is a
+Cargo-generated pruning of the upstream lock, not a dependency version update.
+Every selected version/source/checksum and edge is checked against upstream.
+Native compilation/SDK availability
 and the supported target/feature matrix require separate validation.
 '''
     return {'Cargo.toml': tomlkit.dumps(doc).encode(),
+            'Cargo.lock': lock_bytes,
             'crates/gpui/Cargo.toml': omit_svg_example(source.read('crates/gpui/Cargo.toml')),
             'README.md': readme.encode(),
             RECEIPT: canonical(receipt)}
@@ -455,8 +586,8 @@ def validate_parent(repo, base, controller, digest, scratch):
     receipt = json.loads(git(repo, 'show', f'{base}:{RECEIPT}'))
     old_rev = validate_sha(receipt['upstream'])
     inventory, source, _ = discover(old_rev, scratch)
-    approved = baseline(controller, old_rev, inventory)
-    generated = generated_files(inventory, source, digest, approved)
+    approved, lock_bytes = baseline(controller, old_rev, inventory)
+    generated = generated_files(inventory, source, digest, approved, lock_bytes)
     compare_entries(expected_entries(inventory, generated), git_entries(repo, base))
     messages = git(repo, 'log', '--format=%B', base).decode()
     require(f'GitOrigin-RevId: {old_rev}' in messages.splitlines(), 'accepted ancestry lost Copybara provenance')
@@ -531,8 +662,8 @@ def run_import(args):
     scratch = disk_scratch(args.scratch)
     repo = local_repo(args.accepted_repo)
     inventory, source, _ = discover(args.upstream, scratch)
-    approved = baseline(args.controller_rev, args.upstream, inventory)
-    generated = generated_files(inventory, source, digest, approved)
+    approved, lock_bytes = baseline(args.controller_rev, args.upstream, inventory)
+    generated = generated_files(inventory, source, digest, approved, lock_bytes)
     initial = validate_parent(repo, args.accepted_base, args.controller_rev, digest, scratch)
     run = scratch / 'migration'
     require(not run.exists(), f'clean migration root required: {run}')
