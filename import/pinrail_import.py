@@ -487,6 +487,8 @@ core.workflow(
     destination_files = glob(["**"]),
     transformations = [standalone],
     mode = "SQUASH",
+    # Pin provenance to the requested commit, not the last path-affecting ancestor.
+    migrate_noop_changes = True,
     # Receipt/config bytes depend on the reviewed pin. Validate previous trees
     # independently before running; same-config historical reconstruction is wrong.
     check_last_rev_state = False,
