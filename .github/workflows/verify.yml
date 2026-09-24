@@ -1,0 +1,120 @@
+name: Trusted candidate verification
+
+# Both events source this workflow from default main, NOT the candidate/base branch.
+# Repository-wide execution policy must exclude candidate-controlled event types.
+on:
+  pull_request_target:
+    branches: [main, upstream-import]
+    types: [opened, synchronize, reopened, edited, ready_for_review]
+  repository_dispatch:
+    types: [pinrail-verify]
+
+permissions: {}
+
+env:
+  CONTROLLER_SHA: ${{ github.workflow_sha }}
+  TMPDIR: ${{ github.workspace }}/.scratch/tmp
+  TMP: ${{ github.workspace }}/.scratch/tmp
+  TEMP: ${{ github.workspace }}/.scratch/tmp
+  PYTHONDONTWRITEBYTECODE: '1'
+
+jobs:
+  resolve:
+    name: Resolve trusted snapshot (not the required check)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+      checks: write
+    outputs:
+      snapshot: ${{ steps.start.outputs.snapshot }}
+      check_id: ${{ steps.start.outputs.check_id }}
+      base_ref: ${{ steps.start.outputs.base_ref }}
+    steps:
+      - run: mkdir -p "$TMPDIR"
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: lepahc/pinrail
+          ref: ${{ github.workflow_sha }}
+          path: controller
+          persist-credentials: false
+          fetch-depth: 1
+          submodules: false
+          lfs: false
+          sparse-checkout: scripts/ci
+      - id: start
+        run: python3 controller/scripts/ci/gate.py resolve
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+  verify:
+    name: Read-only candidate worker (not the required check)
+    needs: resolve
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    steps:
+      - run: mkdir -p "$TMPDIR"
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: lepahc/pinrail
+          ref: ${{ github.workflow_sha }}
+          path: controller
+          persist-credentials: false
+          fetch-depth: 1
+          submodules: false
+          lfs: false
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
+        with:
+          version: '0.9.27'
+          checksum: '8636e693ea0e05f5f4294b161f816c4d8df065267fdb0405cfb84c8e326991fa'
+          enable-cache: 'false'
+          working-directory: controller
+      - name: Install Linux compile prerequisites (main only)
+        if: needs.resolve.outputs.base_ref == 'main'
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y \
+            clang cmake ninja-build pkg-config libasound2-dev libfontconfig1-dev \
+            libfreetype6-dev libwayland-dev libxkbcommon-dev libxkbcommon-x11-dev \
+            libxcb1-dev libxcb-shape0-dev libxcb-xfixes0-dev libx11-xcb-dev \
+            libegl1-mesa-dev libvulkan-dev
+      - name: Verify exact snapshot with trusted controller
+        run: python3 controller/scripts/ci/verify.py
+        env:
+          SNAPSHOT: ${{ needs.resolve.outputs.snapshot }}
+        # No write token or secrets; import candidate stays bare, never executed.
+        # Main tests/build scripts may execute here, never in resolve/complete.
+
+  complete:
+    name: Publish exact-head result (not the required check)
+    needs: [resolve, verify]
+    if: always() && needs.resolve.result == 'success'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+      checks: write
+    steps:
+      - run: mkdir -p "$TMPDIR"
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: lepahc/pinrail
+          ref: ${{ github.workflow_sha }}
+          path: controller
+          persist-credentials: false
+          fetch-depth: 1
+          submodules: false
+          lfs: false
+          sparse-checkout: scripts/ci
+      - run: python3 controller/scripts/ci/gate.py complete
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SNAPSHOT: ${{ needs.resolve.outputs.snapshot }}
+          CHECK_ID: ${{ needs.resolve.outputs.check_id }}
+          VERIFY_RESULT: ${{ needs.verify.result }}
+        # Only resolver identifiers and Actions job result cross into publisher.
+        # No candidate/worker artifact is downloaded, sourced, or executed here.
