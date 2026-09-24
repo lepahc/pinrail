@@ -333,6 +333,7 @@ def generated_files(inventory, source, controller_digest, baseline_digest):
                'copybara': {'version': COPYBARA_VERSION, 'source': COPYBARA_SOURCE,
                             'url': COPYBARA_URL, 'sha256': COPYBARA_SHA256},
                'inventory_sha256': hashlib.sha256(canonical(inventory)).hexdigest(),
+               'provenance_policy': 'GitOrigin-RevId is the exact requested snapshot. Copybara-Path-RevId is Copybara native path-affecting history/resumption; raw selected trees must be identical at both revisions.',
                'scope': 'private-evaluation-only', 'package_dirs': inventory['package_dirs'],
                'lock_policy': 'Upstream Cargo.lock bytes and root patches preserved. No dependency re-resolution performed.',
                'omitted_files': list(OMITTED),
@@ -345,6 +346,9 @@ This tree is a mechanically selected GPUI-family snapshot from
 {UPSTREAM.removesuffix('.git')}/tree/{inventory['upstream']}.
 Copybara owns every path on this branch. Candidate integrity must be recomputed
 using a separately reviewed controller checkout, never candidate code.
+`GitOrigin-RevId` records the requested snapshot; Copybara's automatic
+`Copybara-Path-RevId` records its last path-affecting upstream revision and drives
+resumption. The importer verifies that their selected raw source trees match.
 
 ## PRIVATE EVALUATION ONLY — DISTRIBUTION POLICY NOT CLEARED
 
@@ -456,7 +460,28 @@ def validate_parent(repo, base, controller, digest, scratch):
     compare_entries(expected_entries(inventory, generated), git_entries(repo, base))
     messages = git(repo, 'log', '--format=%B', base).decode()
     require(f'GitOrigin-RevId: {old_rev}' in messages.splitlines(), 'accepted ancestry lost Copybara provenance')
+    effective = next((line.split(': ', 1)[1] for line in messages.splitlines()
+                      if line.startswith('Copybara-Path-RevId: ')), None)
+    validate_effective_origin(effective, inventory, scratch)
     return False
+
+
+def validate_effective_origin(effective, inventory, scratch):
+    validate_sha(effective)
+    source = Source(effective, scratch)
+    expected = {n: e for n, e in inventory['files'].items() if n not in OMITTED}
+    actual = {n: {'mode': source.tree[n]['mode'], 'sha': source.tree[n]['sha']}
+              for n in expected if n in source.tree}
+    compare_entries(expected, actual)
+
+
+def commit_provenance(repo, candidate, requested):
+    message = git(repo, 'show', '-s', '--format=%B', candidate).decode()
+    requested_labels = [line for line in message.splitlines() if line.startswith('GitOrigin-RevId:')]
+    require(requested_labels == [f'GitOrigin-RevId: {requested}'], 'candidate lacks exact requested origin provenance')
+    effective = [line.split(': ', 1)[1] for line in message.splitlines() if line.startswith('Copybara-Path-RevId: ')]
+    require(len(effective) == 1, 'candidate lacks unique native Copybara provenance')
+    return validate_sha(effective[0])
 
 
 def ensure_jar(path, scratch):
@@ -476,7 +501,7 @@ def config_text(inventory, generated, destination):
     return f'''# Generated from the trusted controller, never read from the candidate.
 def standalone(ctx):
 {writes}
-    ctx.set_message("Import GPUI snapshot {inventory['upstream']}\\n\\nPrivate evaluation; license policy pending.\\n")
+    ctx.set_message("Import GPUI snapshot {inventory['upstream']}\\n\\nPrivate evaluation; license policy pending.\\n\\nGitOrigin-RevId: {inventory['upstream']}\\n")
 
 core.workflow(
     name = "gpui",
@@ -487,8 +512,10 @@ core.workflow(
     destination_files = glob(["**"]),
     transformations = [standalone],
     mode = "SQUASH",
-    # Pin provenance to the requested commit, not the last path-affecting ancestor.
-    migrate_noop_changes = True,
+    # SQUASH selects the last path-affecting revision even with migrate_noop_changes.
+    # Keep that native marker for genuine Copybara resumption; the separately
+    # labeled requested checkpoint is proven raw-tree-equivalent after migration.
+    custom_rev_id = "Copybara-Path-RevId",
     # Receipt/config bytes depend on the reviewed pin. Validate previous trees
     # independently before running; same-config historical reconstruction is wrong.
     check_last_rev_state = False,
@@ -534,8 +561,8 @@ def run_import(args):
         require(result.returncode == 0, f'Copybara exit {result.returncode}; see {log}')
         parents = git(destination, 'show', '-s', '--format=%P', candidate).decode().split()
         require(parents == [args.accepted_base], 'candidate does not directly descend from accepted base')
-        message = git(destination, 'show', '-s', '--format=%B', candidate).decode()
-        require(f'GitOrigin-RevId: {args.upstream}' in message.splitlines(), 'candidate lacks exact origin provenance')
+        effective = commit_provenance(destination, candidate, args.upstream)
+        validate_effective_origin(effective, inventory, scratch)
         noop = False
     else:
         # Only accept a no-op when the accepted tree is exactly the requested output.
@@ -566,8 +593,9 @@ def verify(args):
     if args.candidate_sha != args.accepted_base:
         parents = git(candidate_repo, 'show', '-s', '--format=%P', args.candidate_sha).decode().split()
         require(parents == [args.accepted_base], 'candidate parent mismatch')
-        message = git(candidate_repo, 'show', '-s', '--format=%B', args.candidate_sha).decode()
-        require(f'GitOrigin-RevId: {args.upstream}' in message.splitlines(), 'candidate provenance mismatch')
+        actual_origin = commit_provenance(candidate_repo, args.candidate_sha, args.upstream)
+        expected_origin = commit_provenance(result['candidate_repo'], result['candidate'], args.upstream)
+        require(actual_origin == expected_origin, 'candidate native Copybara provenance mismatch')
     return {'verified_candidate': args.candidate_sha, 'base': args.accepted_base,
             'tree': result['tree'], 'recomputed': result, 'scope': 'private-evaluation-only'}
 
