@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+set -euo pipefail
+ROOT=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
+export TMPDIR="$ROOT/.scratch/tmp"
+mkdir -p "$TMPDIR"
+export TMP="$TMPDIR" TEMP="$TMPDIR" UV_CACHE_DIR="$ROOT/.scratch/uv-cache"
+if [[ ! -x "$ROOT/.scratch/venv/bin/python" ]]; then
+  uv venv --python python3 "$ROOT/.scratch/venv" >&2
+fi
+uv pip sync --python "$ROOT/.scratch/venv/bin/python" --require-hashes "$ROOT/import/requirements.txt" >&2
+exec "$ROOT/.scratch/venv/bin/python" "$ROOT/import/pinrail_import.py" "$@"
