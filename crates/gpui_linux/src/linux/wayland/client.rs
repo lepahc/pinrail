@@ -2315,14 +2315,17 @@ impl Dispatch<wl_pointer::WlPointer, ()> for WaylandClientStatePtr {
                 }
                 let button = linux_button_to_gpui(button);
                 let Some(button) = button else { return };
-                let Some(original) = state.mouse_focused_window.clone() else {
-                    return;
-                };
-                if original.is_blocked() {
-                    return;
-                }
                 match button_state {
                     wl_pointer::ButtonState::Pressed => {
+                        // Only presses require admission before updating seat state.
+                        // Releases must clear button_pressed even if the target is
+                        // gone or has become blocked by a dialog since the press.
+                        let Some(original) = state.mouse_focused_window.clone() else {
+                            return;
+                        };
+                        if original.is_blocked() {
+                            return;
+                        }
                         if let Some(window) = super::pointer::ime_target(
                             state.keyboard_focused_window.clone(),
                             &original,
