@@ -29,7 +29,17 @@ ROOT_FILES = ('Cargo.toml', 'Cargo.lock', 'LICENSE-APACHE', '.cargo/config.toml'
               'rust-toolchain.toml', 'rustfmt.toml', 'clippy.toml')
 EXTRA_DIRS = ('assets/fonts/ibm-plex-sans', 'assets/fonts/lilex')
 OMITTED = ('crates/gpui/examples/svg/dragon.svg', 'crates/gpui/examples/svg/svg.rs')
-CODE_FILES = ('import/pinrail_import.py', 'import/run', 'import/requirements.txt')
+SUPPLEMENTAL_NOTICES = {
+    'LICENSE-MICROSOFT-MIT': {
+        'controller_path': 'docs/licenses/microsoft-terminal-MIT.txt',
+        'source': 'https://raw.githubusercontent.com/microsoft/terminal/1283c0f5b99a2961673249fa77c6b986efb5086c/LICENSE',
+        'sha256': '5d177f23ecfeb0ea8e050b6a5a16355e1ae9a0b286436ca8f83ed08b3795be6b',
+        'applies_to': ['crates/gpui/src/platform.rs', 'crates/gpui_wgpu/src/shaders.wgsl',
+                       'crates/gpui_windows/src/alpha_correction.hlsl'],
+    },
+}
+CODE_FILES = ('import/pinrail_import.py', 'import/run', 'import/requirements.txt') + tuple(
+    notice['controller_path'] for notice in SUPPLEMENTAL_NOTICES.values())
 RECEIPT = 'PINRAIL_IMPORT.json'
 
 
@@ -318,6 +328,12 @@ def omit_svg_example(data):
 
 
 def generated_files(inventory, source, controller_digest, baseline_digest):
+    notices = {}
+    for destination, notice in SUPPLEMENTAL_NOTICES.items():
+        data = (ROOT / notice['controller_path']).read_bytes()
+        require(hashlib.sha256(data).hexdigest() == notice['sha256'],
+                f'supplemental notice checksum mismatch: {destination}')
+        notices[destination] = data
     # TOML parser/writer, not textual section surgery. Only the SVG target is removed.
     doc = tomlkit.parse(source.read('Cargo.toml').decode())
     ws = doc['workspace']
@@ -336,7 +352,7 @@ def generated_files(inventory, source, controller_digest, baseline_digest):
                'provenance_policy': 'GitOrigin-RevId is the exact requested snapshot. Copybara-Path-RevId is Copybara native path-affecting history/resumption; raw selected trees must be identical at both revisions.',
                'scope': 'private-evaluation-only', 'package_dirs': inventory['package_dirs'],
                'lock_policy': 'Upstream Cargo.lock bytes and root patches preserved. No dependency re-resolution performed.',
-               'omitted_files': list(OMITTED),
+               'omitted_files': list(OMITTED), 'supplemental_notices': SUPPLEMENTAL_NOTICES,
                'license_findings': inventory['license_findings'], 'audit_limits': inventory['audit_limits']}
     readme = f'''# GENERATED UPSTREAM IMPORT — NOT THE CONSUMER BRANCH
 
@@ -358,6 +374,8 @@ explicitly omitted. Other examples are preserved. Package declarations do not
 relicense bundled files. IBM Plex and Lilex fonts are OFL-1.1; cbindgen is an
 external MPL-2.0 macOS build tool, retained by policy. See preserved notices and
 `{RECEIPT}`. No blanket permissive-only or complete license clearance is claimed.
+Microsoft-derived gamma/contrast routines retain their source headers and the
+exact pinned permission text in `LICENSE-MICROSOFT-MIT`.
 
 The root workspace membership and inherited dependency table were reduced;
 the GPUI SVG example target was removed. Other member manifests, root patches
@@ -368,7 +386,9 @@ and the supported target/feature matrix require separate validation.
     return {'Cargo.toml': tomlkit.dumps(doc).encode(),
             'crates/gpui/Cargo.toml': omit_svg_example(source.read('crates/gpui/Cargo.toml')),
             'README.md': readme.encode(),
-            RECEIPT: canonical(receipt)}
+            RECEIPT: canonical(receipt),
+            '.gitattributes': b'# Preserve exact pinned upstream notice bytes.\nLICENSE-MICROSOFT-MIT -text whitespace=cr-at-eol\n',
+            **notices}
 
 
 def audit_source_inputs(entries, read, package_dirs):
