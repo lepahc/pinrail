@@ -7,6 +7,7 @@ import json
 from pathlib import Path
 import subprocess
 import sys
+import shutil
 
 ROOT = Path(__file__).resolve().parents[2]
 spec = importlib.util.spec_from_file_location('importer', ROOT / 'import/pinrail_import.py')
@@ -40,6 +41,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--scratch', required=True)
     parser.add_argument('--jar', required=True)
+    parser.add_argument('--source-import', action='store_true', help='Exercise reviewed source scope instead of private evaluation')
+    parser.add_argument('--discovery-cache', type=Path, help='Copy an existing read-only discovery cache')
     args = parser.parse_args()
     root = Path(args.scratch).resolve()
     assert not root.exists(), 'proof root must be new'
@@ -49,9 +52,12 @@ def main():
     results = {'controller': controller}
 
     def cli(label, command, rev, accepted_repo, accepted_base, *extra, expect_failure=False):
+        if args.discovery_cache:
+            shutil.copytree(args.discovery_cache.resolve(), root / label / 'discovery')
         cmd = [str(ROOT / 'import/run'), command, '--upstream', rev, '--controller-rev', controller,
                '--accepted-repo', str(accepted_repo), '--accepted-base', accepted_base,
-               '--scratch', str(root / label), '--jar', str(Path(args.jar).resolve()), '--private-evaluation', *extra]
+               '--scratch', str(root / label), '--jar', str(Path(args.jar).resolve()),
+               '--source-import' if args.source_import else '--private-evaluation', *extra]
         process = subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True)
         (root / f'{label}.stdout').write_text(process.stdout)
         (root / f'{label}.stderr').write_text(process.stderr)

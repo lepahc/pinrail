@@ -10,8 +10,12 @@ The local route has executed real pinned Copybara migrations, clean-root tree
 recomputation, no-op retries, merge-commit acceptance/resumption, and a downstream
 source-patch survival proof. See [verification.md](verification.md).
 
-The checked-in baselines authorize **private evaluation only**, not a claim of
-complete licensing clearance or permission to publish. The selected policy:
+The checked-in baselines authorize **reviewed source import into `lepahc/pinrail`**
+for exactly `e71963a599c64c213aca1c607e7418503a1e787d` and
+`2c4bc2d7b2c5b7832ad964f39840d823d961cb0e`, under the user-adopted
+[source-notice/input treatment](../docs/license-input-review.md). This is not
+complete third-party/license clearance or a legal guarantee, and does not
+authorize crate releases, consumer changes, or new unknown inputs. The policy:
 
 - Retain all GPUI platform code, optional/target/dev/build dependencies and examples
   except the exact SVG example described below. Non-Linux targets are unverified.
@@ -25,10 +29,13 @@ complete licensing clearance or permission to publish. The selected policy:
   omission, not merely disabling compilation.
 - Preserve original license files and symlink targets. The closure has 26 Apache-2.0
   GPUI/helper packages plus the root Cargo `scratch` patch (MIT OR Apache-2.0).
+- Carry the checksum-pinned supplemental Microsoft MIT permission text from
+  `docs/licenses/microsoft-terminal-MIT.txt` as `LICENSE-MICROSOFT-MIT`, alongside
+  unchanged source headers. The notice is part of the trusted controller digest
+  and exact generated tree. Manifest transformations cannot relicense it.
 
-Complete third-party/file-level licensing, native SDK terms, the eventual public
-baseline, supported build matrix, and real downstream patch adoption remain
-separate review tasks. A private test baseline is not legal clearance.
+Complete third-party/file-level licensing, native SDK terms, supported build
+matrix, and real downstream patch adoption remain separate review tasks.
 
 ## Prerequisites and tool pins
 
@@ -79,7 +86,8 @@ separately licensed assets/tools. Discovery cannot overwrite files or write into
 
 Review an inventory independently, compare it with the previous controller
 baseline, and commit the reviewed envelope at `import/baselines/<upstream>.json`.
-The envelope requires `scope: "private-evaluation-only"`, a nonempty `review`,
+The envelope requires a known scope (`reviewed-source-import` or
+`private-evaluation-only`), a nonempty `review`,
 the exact `inventory` value, and `cargo_lock_sha256` for the reviewed standalone
 lock committed at `import/locks/<upstream>.lock`. Both baseline and lock are read
 from the **specified controller commit**, never from the candidate or a dirty
@@ -98,10 +106,17 @@ import/run import \
   --accepted-repo /absolute/path/to/local/accepted-repository \
   --accepted-base 875ec5e0a0a13b44076e43bb8a46629a8d447091 \
   --scratch .scratch/import-a \
-  --private-evaluation
+  --source-import
 ```
 
-`regenerate` performs the same operation. The example base is the shared bootstrap
+`regenerate` performs the same operation. Exactly one explicit mode is required:
+`--source-import` requires a committed `reviewed-source-import` baseline, while
+`--private-evaluation` can use either known baseline scope and always produces
+private-only output. There is no implied publication capability in either mode.
+Switching output scope or controller code does not waive validation of old accepted
+trees; bootstrap the new route from the shared seed rather than accepting drift.
+
+The example base is the shared bootstrap
 seed; subsequent runs must name the exact accepted import head. The accepted
 repository is read locally, never pushed. A fresh migration subdirectory is
 required. The wrapper creates its own disposable bare destination, fetches the
@@ -135,7 +150,7 @@ import/run verify \
   --candidate-repo /absolute/path/to/local/candidate-repository \
   --candidate-sha FULL_CANDIDATE_SHA \
   --scratch .scratch/verify-a \
-  --private-evaluation
+  --source-import
 ```
 
 Replace the two uppercase placeholders with literal SHAs. Verification executes
@@ -264,9 +279,11 @@ import/run --help
 .scratch/venv/bin/python -m unittest discover -s tests/import -v
 .scratch/venv/bin/python tests/import/prove_local.py \
   --scratch .scratch/new-proof-root \
+  --source-import \
   --jar /absolute/path/to/verified/copybara_deploy.jar
 .scratch/venv/bin/python tests/import/prove_checkpoint.py \
   --scratch .scratch/new-checkpoint-proof-root \
+  --source-import \
   --jar /absolute/path/to/verified/copybara_deploy.jar
 ```
 
@@ -300,6 +317,7 @@ systemd-run --user --wait --pipe --collect \
   env -u DISPLAY -u WAYLAND_DISPLAY -u WAYLAND_SOCKET \
   CARGO_BUILD_JOBS=2 TMPDIR="$PWD/.scratch/tmp" \
   .scratch/venv/bin/python tests/import/prove_standalone.py \
+  --source-import \
   --upstream FULL_UPSTREAM_SHA --controller-rev FULL_CONTROLLER_SHA \
   --candidate-repo /absolute/path/to/migration/destination.git \
   --candidate-sha FULL_CANDIDATE_SHA \

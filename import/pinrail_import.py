@@ -41,6 +41,15 @@ SUPPLEMENTAL_NOTICES = {
 CODE_FILES = ('import/pinrail_import.py', 'import/run', 'import/requirements.txt') + tuple(
     notice['controller_path'] for notice in SUPPLEMENTAL_NOTICES.values())
 RECEIPT = 'PINRAIL_IMPORT.json'
+PRIVATE_SCOPE = 'private-evaluation-only'
+SOURCE_SCOPE = 'reviewed-source-import'
+
+
+def requested_scope(args):
+    private = bool(getattr(args, 'private_evaluation', False))
+    source = bool(getattr(args, 'source_import', False))
+    require(private != source, 'exactly one of --private-evaluation or --source-import is required')
+    return SOURCE_SCOPE if source else PRIVATE_SCOPE
 
 
 class GateError(ValueError):
@@ -409,11 +418,14 @@ def discover(rev, scratch):
     return inventory, source, root
 
 
-def baseline(controller, rev, inventory):
+def baseline(controller, rev, inventory, scope=PRIVATE_SCOPE):
+    require(scope in (PRIVATE_SCOPE, SOURCE_SCOPE), 'unknown requested scope')
     path = f'import/baselines/{validate_sha(rev)}.json'
     raw = git(ROOT, 'show', f'{validate_sha(controller)}:{path}')
     review = json.loads(raw)
-    require(review.get('scope') == 'private-evaluation-only', 'only private evaluation is currently authorized')
+    require(review.get('scope') in (PRIVATE_SCOPE, SOURCE_SCOPE), 'unknown baseline scope')
+    require(scope != SOURCE_SCOPE or review['scope'] == SOURCE_SCOPE,
+            'baseline not authorized for reviewed source import')
     require(review.get('review') and review.get('inventory') == inventory,
             f'unreviewed inventory/dependency/license/build input changes: {path}')
     lock_bytes = git(ROOT, 'show', f'{controller}:import/locks/{rev}.lock')
@@ -441,7 +453,8 @@ def omit_svg_example(data):
     return tomlkit.dumps(doc).encode()
 
 
-def generated_files(inventory, source, controller_digest, baseline_digest, lock_bytes):
+def generated_files(inventory, source, controller_digest, baseline_digest, lock_bytes, scope=PRIVATE_SCOPE):
+    require(scope in (PRIVATE_SCOPE, SOURCE_SCOPE), 'unknown requested scope')
     notices = {}
     for destination, notice in SUPPLEMENTAL_NOTICES.items():
         data = (ROOT / notice['controller_path']).read_bytes()
@@ -477,12 +490,14 @@ def generated_files(inventory, source, controller_digest, baseline_digest, lock_
                             'url': COPYBARA_URL, 'sha256': COPYBARA_SHA256},
                'inventory_sha256': hashlib.sha256(canonical(inventory)).hexdigest(),
                'provenance_policy': 'GitOrigin-RevId is the exact requested snapshot. Copybara-Path-RevId is Copybara native history/resumption (last path-affecting revision or forced checkpoint); raw selected trees must be identical at both revisions.',
-               'scope': 'private-evaluation-only', 'package_dirs': inventory['package_dirs'],
+               'scope': scope, 'package_dirs': inventory['package_dirs'],
                'lock_policy': 'Reviewed all-platform Cargo lock pruning only. Every package version/source/checksum and dependency edge is checked against the original upstream lock. Root patches are restricted to that original selected cohort.',
                'cargo_lock_sha256': hashlib.sha256(lock_bytes).hexdigest(),
                'root_patches': projection['kept_patches'],
                'omitted_files': list(OMITTED), 'supplemental_notices': SUPPLEMENTAL_NOTICES,
                'license_findings': inventory['license_findings'], 'audit_limits': inventory['audit_limits']}
+    scope_notice = ('REVIEWED SOURCE IMPORT — NOT COMPLETE THIRD-PARTY/LICENSE CLEARANCE'
+                    if scope == SOURCE_SCOPE else 'PRIVATE EVALUATION ONLY — DISTRIBUTION POLICY NOT CLEARED')
     readme = f'''# GENERATED UPSTREAM IMPORT — NOT THE CONSUMER BRANCH
 
 **Do not edit this branch. Use downstream `main` for Pinrail consumers and patches.**
@@ -496,7 +511,13 @@ using a separately reviewed controller checkout, never candidate code.
 path-affecting change, or the requested pin for a gated checkpoint-only update.
 The importer verifies that their selected raw source trees match.
 
-## PRIVATE EVALUATION ONLY — DISTRIBUTION POLICY NOT CLEARED
+## {scope_notice}
+
+The receipt scope is `{scope}`. Reviewed source import authorizes only the
+explicitly reviewed snapshot and adopted source-notice/input treatment. It is not
+authorization for crate releases, consumer migrations, or new unknown inputs.
+Private evaluation does not authorize public source import. External dependencies,
+native SDKs, generated outputs and runtime distributions need separate assessment.
 
 All upstream platforms, fonts and native resources in the selected closure are
 retained. The CC BY-SA 3.0 dragon asset and its SVG example source/target are
@@ -601,15 +622,15 @@ def local_repo(path):
     return path
 
 
-def validate_parent(repo, base, controller, digest, scratch):
+def validate_parent(repo, base, controller, digest, scratch, scope=PRIVATE_SCOPE):
     validate_sha(base)
     if base == SEED:
         return True
     receipt = json.loads(git(repo, 'show', f'{base}:{RECEIPT}'))
     old_rev = validate_sha(receipt['upstream'])
     inventory, source, _ = discover(old_rev, scratch)
-    approved, lock_bytes = baseline(controller, old_rev, inventory)
-    generated = generated_files(inventory, source, digest, approved, lock_bytes)
+    approved, lock_bytes = baseline(controller, old_rev, inventory, scope)
+    generated = generated_files(inventory, source, digest, approved, lock_bytes, scope)
     compare_entries(expected_entries(inventory, generated), git_entries(repo, base))
     messages = git(repo, 'log', '--format=%B', base).decode()
     require(f'GitOrigin-RevId: {old_rev}' in messages.splitlines(), 'accepted ancestry lost Copybara provenance')
@@ -648,13 +669,16 @@ def ensure_jar(path, scratch):
     return path
 
 
-def config_text(inventory, generated, destination):
+def config_text(inventory, generated, destination, scope=PRIVATE_SCOPE):
+    require(scope in (PRIVATE_SCOPE, SOURCE_SCOPE), 'unknown requested scope')
+    message = ('Reviewed source import; not complete third-party/license clearance.'
+               if scope == SOURCE_SCOPE else 'Private evaluation; license policy pending.')
     writes = '\n'.join(f'    ctx.write_path(ctx.new_path({json.dumps(name)}), {json.dumps(data.decode(), ensure_ascii=False)})'
                        for name, data in generated.items())
     return f'''# Generated from the trusted controller, never read from the candidate.
 def standalone(ctx):
 {writes}
-    ctx.set_message("Import GPUI snapshot {inventory['upstream']}\\n\\nPrivate evaluation; license policy pending.\\n\\nGitOrigin-RevId: {inventory['upstream']}\\n")
+    ctx.set_message("Import GPUI snapshot {inventory['upstream']}\\n\\n{message}\\n\\nGitOrigin-RevId: {inventory['upstream']}\\n")
 
 core.workflow(
     name = "gpui",
@@ -721,14 +745,14 @@ def authorize_checkpoint(repo, base, inventory, generated, scratch, log):
 def run_import(args):
     validate_sha(args.upstream)
     validate_sha(args.accepted_base)
+    scope = requested_scope(args)
     digest = trusted_controller(args.controller_rev)
-    require(args.private_evaluation, '--private-evaluation is required; publication is not approved')
     scratch = disk_scratch(args.scratch)
     repo = local_repo(args.accepted_repo)
     inventory, source, _ = discover(args.upstream, scratch)
-    approved, lock_bytes = baseline(args.controller_rev, args.upstream, inventory)
-    generated = generated_files(inventory, source, digest, approved, lock_bytes)
-    initial = validate_parent(repo, args.accepted_base, args.controller_rev, digest, scratch)
+    approved, lock_bytes = baseline(args.controller_rev, args.upstream, inventory, scope)
+    generated = generated_files(inventory, source, digest, approved, lock_bytes, scope)
+    initial = validate_parent(repo, args.accepted_base, args.controller_rev, digest, scratch, scope)
     run = scratch / 'migration'
     require(not run.exists(), f'clean migration root required: {run}')
     run.mkdir()
@@ -737,7 +761,7 @@ def run_import(args):
     git(destination, 'fetch', '--no-tags', str(repo), f'{args.accepted_base}:refs/heads/accepted')
     jar = ensure_jar(args.jar, scratch)
     config = run / 'copy.bara.sky'
-    config.write_text(config_text(inventory, generated, destination))
+    config.write_text(config_text(inventory, generated, destination, scope))
     home = run / 'home'
     home.mkdir()
     command = ['java', '-Xmx2g', f'-Djava.io.tmpdir={scratch / "tmp"}', f'-Duser.home={home}',
@@ -790,7 +814,7 @@ def run_import(args):
               'upstream': args.upstream, 'controller': args.controller_rev, 'noop': noop,
               'checkpoint_update': checkpoint_update,
               'checkpoint_log': str(checkpoint_log) if checkpoint_log else None,
-              'candidate_repo': str(destination), 'log': str(log), 'scope': 'private-evaluation-only',
+              'candidate_repo': str(destination), 'log': str(log), 'scope': scope,
               'files': len(expected), 'packages': len(inventory['package_dirs'])}
     (run / 'result.json').write_bytes(canonical(output))
     return output
@@ -811,7 +835,7 @@ def verify(args):
         expected_origin = commit_provenance(result['candidate_repo'], result['candidate'], args.upstream)
         require(actual_origin == expected_origin, 'candidate native Copybara provenance mismatch')
     return {'verified_candidate': args.candidate_sha, 'base': args.accepted_base,
-            'tree': result['tree'], 'recomputed': result, 'scope': 'private-evaluation-only'}
+            'tree': result['tree'], 'recomputed': result, 'scope': result['scope']}
 
 
 def main():
@@ -829,7 +853,10 @@ def main():
         p.add_argument('--accepted-base', required=True)
         p.add_argument('--scratch', required=True)
         p.add_argument('--jar')
-        p.add_argument('--private-evaluation', action='store_true')
+        modes = p.add_mutually_exclusive_group(required=True)
+        modes.add_argument('--private-evaluation', action='store_true')
+        modes.add_argument('--source-import', action='store_true',
+                           help='Require committed reviewed-source-import authorization; not complete license clearance')
         if command == 'verify':
             p.add_argument('--candidate-repo', required=True)
             p.add_argument('--candidate-sha', required=True)

@@ -19,6 +19,11 @@
 - Use a trusted-`main` Actions route rather than allowing an import candidate to
   provide its own authoritative checker. Repository enforcement must still be
   exercised and verified before being called installed.
+- Land the reviewed source snapshots into `lepahc/pinrail`, carrying the adopted
+  source notices and exact inventories. This is narrow source-import authority,
+  not complete third-party/license clearance or a legal guarantee. The controller
+  requires explicit `--source-import` and committed `reviewed-source-import`
+  scope; private evaluation remains a separate mode.
 - Do not migrate consumers, publish packages/releases, schedule automatic
   upstream advancement, buy services, create broad credentials, or launch on
   the live desktop as part of this bootstrap.

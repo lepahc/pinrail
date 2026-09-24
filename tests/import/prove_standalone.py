@@ -21,6 +21,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     for arg in ('upstream', 'controller-rev', 'candidate-repo', 'candidate-sha', 'worktree', 'scratch'):
         parser.add_argument('--' + arg, required=True)
+    parser.add_argument('--source-import', action='store_true', help='Qualify a reviewed-source-import candidate')
     args = parser.parse_args()
     im.validate_sha(args.upstream)
     im.validate_sha(args.candidate_sha)
@@ -30,8 +31,9 @@ def main():
     im.require(not worktree.exists(), 'a new actual Git worktree is required')
     candidate_repo = im.local_repo(args.candidate_repo)
     inventory, source, _ = im.discover(args.upstream, scratch)
-    approved, lock_bytes = im.baseline(args.controller_rev, args.upstream, inventory)
-    generated = im.generated_files(inventory, source, digest, approved, lock_bytes)
+    scope = im.SOURCE_SCOPE if args.source_import else im.PRIVATE_SCOPE
+    approved, lock_bytes = im.baseline(args.controller_rev, args.upstream, inventory, scope)
+    generated = im.generated_files(inventory, source, digest, approved, lock_bytes, scope)
     im.compare_entries(im.expected_entries(inventory, generated), im.git_entries(candidate_repo, args.candidate_sha))
     im.git(candidate_repo, 'worktree', 'add', '--detach', str(worktree), args.candidate_sha)
     target = worktree / '.scratch/target'

@@ -26,6 +26,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--scratch', required=True)
     parser.add_argument('--jar', required=True)
+    parser.add_argument('--source-import', action='store_true', help='Exercise reviewed source scope in the isolated fixture')
     parser.add_argument('--discovery-cache', type=Path,
                         help='Optional read-only cache to COPY; raw inputs are still hash-checked')
     args = parser.parse_args()
@@ -52,12 +53,13 @@ def main():
     selected, _, _ = im.discover(SELECTED, cache)
     checkpoint, _, _ = im.discover(CHECKPOINT, cache)
     original_controller = im.git(controller, 'rev-parse', 'HEAD').decode().strip()
-    _, lock_bytes = im.baseline(original_controller, CHECKPOINT, checkpoint)
+    scope = im.SOURCE_SCOPE if args.source_import else im.PRIVATE_SCOPE
+    _, lock_bytes = im.baseline(original_controller, CHECKPOINT, checkpoint, scope)
     assert {k: v for k, v in selected.items() if k != 'upstream'} == {
         k: v for k, v in checkpoint.items() if k != 'upstream'}
     prior, _, _ = im.discover(PRIOR, cache)
     assert prior['files'] != selected['files'], 'must exercise a selected-input update first'
-    review = {'scope': 'private-evaluation-only',
+    review = {'scope': scope,
               'review': 'Test fixture only: native snapshot has exactly the already reviewed checkpoint inputs. Not a production approval.',
               'inventory': selected, 'cargo_lock_sha256': hashlib.sha256(lock_bytes).hexdigest()}
     (controller / f'import/baselines/{SELECTED}.json').write_bytes(im.canonical(review))
@@ -74,7 +76,8 @@ def main():
         command = [str(ROOT / '.scratch/venv/bin/python'), str(controller / 'import/pinrail_import.py'),
                    'verify' if candidate else 'import', '--upstream', upstream,
                    '--controller-rev', revision, '--accepted-repo', str(repo), '--accepted-base', base,
-                   '--scratch', str(scratch), '--jar', str(Path(args.jar).resolve()), '--private-evaluation']
+                   '--scratch', str(scratch), '--jar', str(Path(args.jar).resolve()),
+                   '--source-import' if args.source_import else '--private-evaluation']
         if candidate:
             command += ['--candidate-repo', candidate['candidate_repo'], '--candidate-sha', candidate['candidate']]
         process = subprocess.run(command, capture_output=True, text=True, env=im.git_env())

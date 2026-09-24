@@ -73,7 +73,7 @@ class CheckpointTests(unittest.TestCase):
         self.stack.enter_context(patch.object(im, 'Source', return_value=self.source))
         self.stack.enter_context(patch.object(im, 'ensure_jar', return_value=self.root / 'not-executed.jar'))
         self.stack.enter_context(patch.object(im, 'audit_source_inputs', return_value={}))
-        self.transform = lambda inv, src, digest, approved, lock_bytes: {
+        self.transform = lambda inv, src, digest, approved, lock_bytes, scope=im.PRIVATE_SCOPE: {
             'Cargo.toml': raw['Cargo.toml'],
             'README.md': f"Checkpoint {inv['upstream']}\n".encode(),
             im.RECEIPT: im.canonical({'upstream': inv['upstream'], 'controller_code_sha256': digest,
@@ -201,6 +201,19 @@ class CheckpointTests(unittest.TestCase):
         self.assertEqual(result['candidate'], self.base)
         self.assertEqual(len(self.calls), 1)
         self.assertNotIn('--force', self.calls[0])
+
+    def test_new_controller_digest_cannot_waive_old_accepted_tree(self):
+        # A genuinely committed new controller with unchanged inputs is not
+        # permission to reconstruct the prior tree using its old digest.
+        path = self.controller / 'import/pinrail_import.py'
+        path.write_bytes(path.read_bytes() + b'\n# Controller revision fixture\n')
+        im.git(self.controller, 'add', '.')
+        im.git(self.controller, 'commit', '-m', 'Change committed controller bytes')
+        self.revision = im.git(self.controller, 'rev-parse', 'HEAD').decode().strip()
+        with self.assertRaisesRegex(im.GateError, 'byte/mode/path'):
+            self.run_import()
+        self.assertEqual(self.calls, [])
+        self.assert_no_force()
 
     def test_non_forward_history_cannot_force_even_with_equal_inputs(self):
         # A valid reviewed inventory and an exact empty-range message are not
