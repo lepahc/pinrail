@@ -131,10 +131,13 @@ def run_url(snapshot):
 def checked_readback(api, snapshot, check_id):
     number(check_id)
     result = object_value(api.call('GET', f'/check-runs/{check_id}'))
+    # Actions may replace the supplied run URL with this exact check's canonical URL.
+    # The external ID still binds the workflow run, attempt and PR in either form.
+    details_urls = (run_url(snapshot), f'https://github.com/{REPOSITORY}/runs/{check_id}')
     require(result.get('id') == check_id and result.get('head_sha') == snapshot['head']
             and result.get('name') == CHECKS[snapshot['base_ref']]
             and result.get('external_id') == identity(snapshot)
-            and result.get('details_url') == run_url(snapshot), 'check identity mismatch')
+            and result.get('details_url') in details_urls, 'check identity mismatch')
     app = object_value(result.get('app'))
     require(app.get('slug') == 'github-actions', 'unexpected publisher app')
     number(app.get('id'))  # Record actual integration ID; never guess it for a rule.
