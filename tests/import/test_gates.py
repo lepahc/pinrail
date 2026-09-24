@@ -116,6 +116,33 @@ class GateTests(unittest.TestCase):
         self.assertIn('generated — branch', config)
         self.assertNotIn('\\u2014', config)
 
+    def test_pinned_jar_hash_is_checked_even_for_explicit_local_path(self):
+        (ROOT / '.scratch/tests').mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=ROOT / '.scratch/tests') as temp:
+            jar = pathlib.Path(temp) / 'copybara.jar'
+            jar.write_bytes(b'not the pinned release')
+            with patch.object(im, 'fetch', side_effect=AssertionError('must not replace explicit jar')):
+                with self.assertRaisesRegex(im.GateError, 'checksum mismatch'):
+                    im.ensure_jar(jar, temp)
+
+    def test_provenance_requires_unique_requested_and_native_markers(self):
+        (ROOT / '.scratch/tests').mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=ROOT / '.scratch/tests') as temp:
+            repo = pathlib.Path(temp)
+            im.git(repo, 'init')
+            requested, native = 'a'*40, 'b'*40
+            message = f'Import\n\nGitOrigin-RevId: {requested}\nCopybara-Path-RevId: {native}\n'
+            im.git(repo, 'commit', '--allow-empty', '-m', message)
+            commit = im.git(repo, 'rev-parse', 'HEAD').decode().strip()
+            self.assertEqual(im.commit_provenance(repo, commit, requested), native)
+            for bad in [message + f'GitOrigin-RevId: {native}\n',
+                        message.replace('Copybara-Path-RevId:', 'Unknown-RevId:'),
+                        message.replace(requested, 'c'*40)]:
+                im.git(repo, 'commit', '--allow-empty', '-m', bad)
+                commit = im.git(repo, 'rev-parse', 'HEAD').decode().strip()
+                with self.assertRaises(im.GateError):
+                    im.commit_provenance(repo, commit, requested)
+
 
 if __name__ == '__main__':
     unittest.main()
