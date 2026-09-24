@@ -63,13 +63,17 @@ def import_command(controller, objects, snapshot, scratch):
     require(isinstance(receipt, dict), 'candidate receipt must be an object')
     upstream = sha(receipt.get('upstream'))
     # The receipt is NOT authority. Only the committed controller's inventory can allow U.
-    git(controller, 'cat-file', '-e', f'{snapshot["controller"]}:import/baselines/{upstream}.json')
-    # Adapter point: replace private-evaluation only after reviewed public baseline support.
+    baseline = json.loads(git(controller, 'show',
+                              f'{snapshot["controller"]}:import/baselines/{upstream}.json'))
+    require(isinstance(baseline, dict), 'invalid committed baseline')
+    scope_flag = {'private-evaluation-only': '--private-evaluation',
+                  'reviewed-source-import': '--source-import'}.get(baseline.get('scope'))
+    require(scope_flag is not None, 'unsupported committed baseline scope')
     return [str(controller / 'import' / 'run'), 'verify', '--upstream', upstream,
             '--controller-rev', snapshot['controller'], '--accepted-repo', str(objects),
             '--accepted-base', snapshot['base'], '--candidate-repo', str(objects),
             '--candidate-sha', snapshot['head'], '--scratch', str(Path(scratch).resolve()),
-            '--private-evaluation']
+            scope_flag]
 
 
 def worker_environment(scratch):
@@ -82,11 +86,10 @@ def worker_environment(scratch):
     env.update(TMPDIR=str(tmp), TMP=str(tmp), TEMP=str(tmp), PYTHONDONTWRITEBYTECODE='1',
                GIT_CONFIG_NOSYSTEM='1', GIT_CONFIG_GLOBAL='/dev/null', GIT_TERMINAL_PROMPT='0',
                GIT_NO_REPLACE_OBJECTS='1')
-    if 'JAVA_HOME_21_X64' in env:
-        env['JAVA_HOME'] = env['JAVA_HOME_21_X64']
-        env['PATH'] = env['JAVA_HOME'] + '/bin:' + env['PATH']
+    # Preserve the workflow's pinned setup-java environment. Copybara v20260921
+    # contains Java class version 69 and cannot run on the runner's Java 21.
     # No display/socket connection to a live desktop, even in a manually invoked worker.
-    for key in ('DISPLAY', 'WAYLAND_DISPLAY', 'XDG_RUNTIME_DIR'):
+    for key in ('DISPLAY', 'WAYLAND_DISPLAY', 'WAYLAND_SOCKET', 'XDG_RUNTIME_DIR'):
         env.pop(key, None)
     return env
 

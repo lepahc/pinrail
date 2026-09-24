@@ -23,7 +23,10 @@ class MainContractTests(unittest.TestCase):
         self.controller, self.candidate = self.root / 'controller', self.root / 'candidate'
         self.controller.mkdir()
         self.candidate.mkdir()
-        (self.controller / 'rust-toolchain.toml').write_text('[toolchain]\nchannel="1.98.1"\n')
+        toolchain = self.controller / 'scripts/ci/rust-toolchain.toml'
+        toolchain.parent.mkdir(parents=True)
+        toolchain.write_text('[toolchain]\nchannel="1.98.1"\n')
+        (self.controller / 'rust-toolchain.toml').write_text('[toolchain]\nchannel="untrusted-root"\n')
         for name in ('Cargo.toml', 'Cargo.lock', 'import/pinrail_import.py',
                      'tests/ci/test_sample.py', 'tests/import/test_sample.py'):
             path = self.candidate / name
@@ -36,9 +39,15 @@ class MainContractTests(unittest.TestCase):
         self.assertEqual(commands[1][-1], str(self.controller / 'import/requirements.txt'))
         self.assertIn('--require-hashes', commands[1])
         self.assertIn(['rustup', 'toolchain', 'install', '1.98.1', '--profile', 'minimal'], commands)
-        self.assertEqual(commands[-1], ['cargo', '+1.98.1', 'check', '--locked', '-p', 'gpui',
-                                       '-p', 'gpui_platform', '--features',
-                                       'gpui_platform/wayland,gpui_platform/x11', '--tests'])
+        self.assertIn(['cargo', '+1.98.1', 'metadata', '--locked', '--all-features', '--format-version', '1'], commands)
+        self.assertIn(['cargo', '+1.98.1', 'check', '--locked', '--workspace', '--all-targets',
+                       '--features', 'gpui/test-support'], commands)
+        self.assertEqual(commands[-1], ['cargo', '+1.98.1', 'test', '--locked', '-p', 'gpui',
+                                       '-p', 'gpui_linux', '-p', 'gpui_wgpu', '--lib',
+                                       '--features', 'gpui/test-support', '--', '--test-threads=2'])
+        install_index = next(i for i,c in enumerate(commands) if c[0] == 'rustup')
+        first_tests = next(i for i,c in enumerate(commands) if '-m' in c)
+        self.assertLess(install_index, first_tests, 'importer tests invoke the pinned Cargo')
         self.assertEqual([c[5] for c in commands if '-m' in c], ['tests/ci', 'tests/import'])
         self.assertNotIn('untrusted', str(commands))
 
@@ -55,14 +64,21 @@ class MainContractTests(unittest.TestCase):
         secret_names = ('GH_TOKEN', 'GITHUB_TOKEN', 'ACTIONS_RUNTIME_TOKEN',
                         'ACTIONS_ID_TOKEN_REQUEST_TOKEN', 'GITHUB_OUTPUT', 'GITHUB_ENV',
                         'GITHUB_PATH', 'GITHUB_STATE', 'GITHUB_STEP_SUMMARY',
-                        'DISPLAY', 'WAYLAND_DISPLAY', 'XDG_RUNTIME_DIR')
+                        'DISPLAY', 'WAYLAND_DISPLAY', 'WAYLAND_SOCKET', 'XDG_RUNTIME_DIR')
         with patch.dict(os.environ, {key: 'sentinel' for key in secret_names}):
             env = verify.worker_environment(self.root)
         for key in secret_names:
-            self.assertNotIn(key, env)
+            self.assertFalse(key in env, f'{key} survived worker sanitization')
         self.assertEqual(env['TMPDIR'], str(self.root / 'tmp'))
         self.assertEqual(env['GIT_CONFIG_GLOBAL'], '/dev/null')
         self.assertTrue(Path(env['TMPDIR']).is_dir())
+
+    def test_worker_keeps_setup_java_instead_of_downgrading_to_runner_java21(self):
+        with patch.dict(os.environ, {'JAVA_HOME': '/pinned/jdk25', 'JAVA_HOME_21_X64': '/runner/jdk21',
+                                     'PATH': '/pinned/jdk25/bin:/usr/bin'}):
+            env = verify.worker_environment(self.root)
+        self.assertEqual(env['JAVA_HOME'], '/pinned/jdk25')
+        self.assertEqual(env['PATH'], '/pinned/jdk25/bin:/usr/bin')
 
 
 if __name__ == '__main__':

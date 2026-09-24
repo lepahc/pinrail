@@ -72,12 +72,24 @@ jobs:
           checksum: '8636e693ea0e05f5f4294b161f816c4d8df065267fdb0405cfb84c8e326991fa'
           enable-cache: 'false'
           working-directory: controller
+      - name: Install checksum-pinned Copybara JDK
+        run: |
+          curl --proto '=https' --tlsv1.2 --fail --location --retry 3 \
+            'https://github.com/adoptium/temurin25-binaries/releases/download/jdk-25.0.4.1%2B1/OpenJDK25U-jdk_x64_linux_hotspot_25.0.4.1_1.tar.gz' \
+            --output "$TMPDIR/pinrail-jdk.tar.gz"
+          printf 'dbb698396d478e7fa2b1e50f4103324b2a99b90569ee27c33f2261f9215cf41e  %s\n' "$TMPDIR/pinrail-jdk.tar.gz" | sha256sum --check --strict -
+          JAVA_HOME="$GITHUB_WORKSPACE/.scratch/jdk"
+          mkdir -p "$JAVA_HOME"
+          tar -xzf "$TMPDIR/pinrail-jdk.tar.gz" --strip-components=1 -C "$JAVA_HOME"
+          printf 'JAVA_HOME=%s\n' "$JAVA_HOME" >> "$GITHUB_ENV"
+          printf '%s/bin\n' "$JAVA_HOME" >> "$GITHUB_PATH"
+          "$JAVA_HOME/bin/java" --version
       - name: Install Linux compile prerequisites (main only)
         if: needs.resolve.outputs.base_ref == 'main'
         run: |
           sudo apt-get update
           sudo apt-get install --no-install-recommends -y \
-            clang cmake ninja-build pkg-config libasound2-dev libfontconfig1-dev \
+            clang cmake ninja-build pkg-config libssl-dev libasound2-dev libfontconfig1-dev \
             libfreetype6-dev libwayland-dev libxkbcommon-dev libxkbcommon-x11-dev \
             libxcb1-dev libxcb-shape0-dev libxcb-xfixes0-dev libx11-xcb-dev \
             libegl1-mesa-dev libvulkan-dev

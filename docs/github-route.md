@@ -67,14 +67,15 @@ migration into a disposable **local** destination:
 import/run verify --upstream U --controller-rev K \
   --accepted-repo LOCALBARE --accepted-base B \
   --candidate-repo LOCALBARE --candidate-sha C \
-  --scratch PROJECT_SCRATCH --private-evaluation
+  --scratch PROJECT_SCRATCH --source-import
 ```
 
-**Current limitation:** the importer interface and baselines are private-evaluation
-only. This flag does not authorize public distribution or clear licenses. The
-adapter must change alongside a separately reviewed public-baseline interface;
-do not merely delete the flag or silently approve a new inventory. See the import
-controller's own runbook for tool pins, source scope, provenance and licensing.
+The adapter selects `--source-import` only for a committed controller baseline
+whose scope is `reviewed-source-import`; `private-evaluation-only` instead selects
+`--private-evaluation`. Unknown/missing scopes fail. Candidate receipt scope is
+not authority. Source acceptance is not crate-release authorization or complete
+third-party/SDK/runtime license clearance. See the import controller's runbook
+for tool pins, exact notice/input inventory, source scope and provenance.
 
 Controller/workflow/helper/baseline changes into main require deliberate,
 independent **source review** before owner acceptance. A green main check is only
@@ -90,21 +91,26 @@ GitHub reviewer identity.
 - fails if the candidate lacks Cargo manifests/lockfile, importer or test suites;
 - installs Python dependencies from K's hash-pinned importer requirements;
 - runs candidate `tests/ci` and `tests/import` unittest suites;
-- installs the exact Rust release declared in K, not a candidate-selected release;
-- runs locked no-dependency Cargo metadata and compiles `gpui`/`gpui_platform`
-  plus their tests with Wayland and X11 selected.
+- installs the exact Rust release in K's `scripts/ci/rust-toolchain.toml`, before
+  importer tests which themselves invoke Cargo (the pin exists before main has
+  the generated source's root toolchain file);
+- runs full all-feature locked Cargo metadata, the entire workspace all-target
+  Linux check with test support, and GPUI/Linux/wgpu headless library tests.
 
 The exact head must contain B as an ancestor; strict up-to-date checks remain
-necessary at merge time. The final Cargo command is the native-integration adapter:
-extend it with the independently verified port regression commands once integrated.
-The initial command list is **not** a claim of successful Linux compilation,
-native behavior, GPU/compositor, other-platform or application qualification.
+necessary at merge time. The commands match the qualified Linux profile, use two
+Cargo jobs/test threads and disable dev/test debug information. A passing native
+check is not GPU/compositor, other-platform or application qualification.
 Compilation can execute candidate build scripts; never move it into a write-token
 job. No display is connected and no GUI program is deliberately launched.
 
-Ubuntu 24.04 supplies Python and Java 21 (the worker selects `JAVA_HOME_21_X64` if
-present). Every action is commit-pinned; uv is version/checksum-pinned with cache
-upload disabled. Copybara and Python hashes belong to the importer. The hosted
+Ubuntu 24.04 supplies Python. Copybara v20260921's main class is class version 69;
+the runner's Java 21 is insufficient. The workflow installs the exact Linux x64
+Temurin 25.0.4.1+1 archive with SHA-256
+`dbb698396d478e7fa2b1e50f4103324b2a99b90569ee27c33f2261f9215cf41e` and preserves that
+JAVA_HOME instead of downgrading it. Every action is commit-pinned; uv is
+version/checksum-pinned with cache upload disabled. Copybara and Python hashes
+belong to the importer. The hosted
 runner image and Ubuntu package repository are not immutable build environments.
 Temporary directories are under the workspace `.scratch`, not `/tmp`.
 

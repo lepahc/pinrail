@@ -37,7 +37,8 @@ class WorkerTests(unittest.TestCase):
         self.base = git(self.repo, 'rev-parse', 'HEAD')
         git(self.repo, 'checkout', '-b', 'main')
         (self.repo / 'import' / 'baselines').mkdir(parents=True)
-        (self.repo / 'import' / 'baselines' / f'{U}.json').write_text('{"review":"test fixture only"}')
+        (self.repo / 'import' / 'baselines' / f'{U}.json').write_text(
+            '{"review":"test fixture only","scope":"private-evaluation-only"}')
         (self.repo / 'import' / 'run').write_text('#!/bin/sh\nexit 0\n')
         (self.repo / 'import' / 'run').chmod(0o755)
         git(self.repo, 'add', '.')
@@ -104,6 +105,21 @@ class WorkerTests(unittest.TestCase):
                 with self.assertRaises(gate.GateError):
                     verify.import_command(self.repo, objects, self.snapshot, self.root / 'verify')
                 self.assertFalse(self.marker.exists())
+
+    def test_import_scope_comes_only_from_committed_controller_baseline(self):
+        objects = self.objects()
+        baseline = self.repo / 'import/baselines' / f'{U}.json'
+        for scope in ('reviewed-source-import', 'unknown-policy'):
+            baseline.write_text(json.dumps({'scope': scope, 'review': 'fixture'}))
+            git(self.repo, 'add', '.')
+            git(self.repo, 'commit', '-m', 'Change trusted fixture policy')
+            self.snapshot['controller'] = git(self.repo, 'rev-parse', 'HEAD')
+            if scope == 'reviewed-source-import':
+                command = verify.import_command(self.repo, objects, self.snapshot, self.root / 'verify')
+                self.assertEqual(command[-1], '--source-import')
+            else:
+                with self.assertRaisesRegex(gate.GateError, 'unsupported committed baseline scope'):
+                    verify.import_command(self.repo, objects, self.snapshot, self.root / 'verify')
 
     def test_receipt_symlink_and_extra_parent_commit_are_rejected(self):
         self.amend_candidate(symlink=True)
