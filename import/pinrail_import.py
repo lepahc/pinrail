@@ -367,6 +367,70 @@ and the supported target/feature matrix require separate validation.
             RECEIPT: canonical(receipt)}
 
 
+def audit_source_inputs(entries, read, package_dirs):
+    """Conservative static includes + reviewed native inputs; never run build scripts.
+
+    This is not a Rust interpreter or a complete I/O sandbox. Exact source-byte
+    approval remains mandatory for dynamic resource loading and native tools.
+    """
+    static, generated = [], []
+    dynamic = {
+        'crates/gpui_apple/src/metal_renderer.rs': {'shaders.metallib', 'stitched_shaders.metal'},
+        'crates/gpui_windows/src/directx_renderer.rs': {'shaders_bytes.rs'},
+    }
+    pattern = re.compile(r'\b(include(?:_bytes|_str)?)!\s*\(')
+    literal = re.compile(r'\s*"([^"\\\n]*)"\s*\)')
+    out_dir = re.compile(r'\s*concat!\(\s*env!\("OUT_DIR"\),\s*"/([\w.]+)"\s*\)\s*\)')
+    for name in sorted(entries):
+        if not name.endswith('.rs'):
+            continue
+        text = read(name).decode()
+        for occurrence in pattern.finditer(text):
+            tail = text[occurrence.end():]
+            match = literal.match(tail)
+            if match:
+                target = relative_path(posixpath.dirname(name), match[1])
+                require(target in entries, f'include outside selected inputs: {name} -> {target}')
+                static.append({'from': name, 'input': target})
+            else:
+                match = out_dir.match(tail)
+                require(match and match[1] in dynamic.get(name, set()),
+                        f'unreviewed nonliteral include in {name}: {tail[:160]}')
+                generated.append({'from': name, 'generated': match[1]})
+    native_inputs = {
+        'crates/gpui/build.rs': ['crates/gpui/resources/windows/gpui.rc',
+                               'crates/gpui/resources/windows/gpui.manifest.xml'],
+        'crates/gpui_apple/build.rs': [f'crates/gpui/src/{n}.rs' for n in ('scene', 'geometry', 'color', 'window', 'platform')]
+                                     + ['crates/gpui_apple/src/metal_renderer.rs', 'crates/gpui_apple/src/shaders.metal'],
+        'crates/gpui_windows/build.rs': ['crates/gpui_windows/src/shaders.hlsl', 'crates/gpui_windows/src/color_text_raster.hlsl'],
+        'crates/ztracing/build.rs': [],
+        'tooling/corgi/patches/scratch/build.rs': [],
+    }
+    actual_scripts = {n for n in entries if n.endswith('/build.rs')}
+    require(actual_scripts == native_inputs.keys(), 'unknown or missing build script; review native input policy')
+    for script, paths in native_inputs.items():
+        require(all(n in entries for n in paths), f'missing native build inputs for {script}')
+    for directory in package_dirs:
+        m = tomllib.loads(read(directory + '/Cargo.toml').decode())
+        package = m['package']
+        paths = []
+        for key in ('readme', 'license-file', 'build'):
+            if isinstance(package.get(key), str):
+                paths.append(package[key])
+        for kind in ('lib', 'bin', 'example', 'test', 'bench'):
+            targets = m.get(kind, [])
+            if isinstance(targets, dict):
+                targets = [targets]
+            paths.extend(t['path'] for t in targets if 'path' in t)
+        for path in paths:
+            target = relative_path(directory, path)
+            require(target in entries, f'manifest input outside selected files: {directory} -> {path}')
+    return {'literal_includes': static, 'generated_includes': generated, 'native_inputs': native_inputs,
+            'external_tools': {'macos': ['cbindgen (MPL-2.0)', 'xcrun metal', 'xcrun metallib'],
+                               'windows': ['embed-resource', 'fxc.exe (GPUI_FXC_PATH or Windows SDK)']},
+            'limits': 'Source-byte review gates dynamic I/O. No native SDK execution or full external license clearance.'}
+
+
 def expected_entries(inventory, generated):
     entries = {n: e for n, e in inventory['files'].items() if n not in OMITTED}
     entries.update({n: {'mode': '100644', 'sha': blob_sha(b)} for n, b in generated.items()})
@@ -476,6 +540,10 @@ def run_import(args):
         require(result.returncode in (0, 4), f'Copybara failed: exit {result.returncode}; see {log}')
         candidate, noop = args.accepted_base, True
     compare_entries(expected_entries(inventory, generated), git_entries(destination, candidate))
+    audit = audit_source_inputs(expected_entries(inventory, generated),
+                                lambda name: git(destination, 'show', f'{candidate}:{name}'),
+                                inventory['package_dirs'])
+    (run / 'input-audit.json').write_bytes(canonical(audit))
     tree = git(destination, 'rev-parse', f'{candidate}^{{tree}}').decode().strip()
     output = {'candidate': candidate, 'base': args.accepted_base, 'tree': tree,
               'upstream': args.upstream, 'controller': args.controller_rev, 'noop': noop,
