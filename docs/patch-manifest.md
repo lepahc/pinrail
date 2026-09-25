@@ -33,7 +33,12 @@ Do not copy these implementations over current upstream:
 - **U4:** basic layer-shell creation and input regions. Current
   `WindowKind::LayerShell` is partial overlap, not retained hide/remap equivalence.
 
-## Adopted initial correctness series — implementation under verification
+## Adopted initial correctness series — reviewed and CPU-qualified
+
+The port and subsequent release-state repair are independently reviewed and pass
+the standalone Linux compile and CPU-only regression gates. See
+[PATCHES.md](../PATCHES.md) for exact implementation, retained RED/GREEN evidence
+and limits; this does not qualify native compositor/IME or GPU behavior.
 
 - **G1 — retry-registration failure recovery.** Recover one coalesced wake if
   calloop rejects retry-timer admission. Preserve current failed-presentation

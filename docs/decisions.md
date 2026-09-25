@@ -56,18 +56,21 @@ from the licensing of generated output or application runtime linkage.
 
 These choices must be backed by executed results before being called working.
 
-## Unresolved until inventory and verification
+## Verification status and remaining scope
 
-- Applicability, implementation and regression evidence for the adopted basic
-  patch groups; see `patch-manifest.md`. Upstream-superseded fixes are not copied.
+- The adopted basic patch groups and release-state repair are independently
+  reviewed and Linux CPU-qualified; see `patch-manifest.md` and `../PATCHES.md`.
+  Upstream-superseded fixes are not copied.
 - Any future adoption of the explicitly deferred retained-layer, capture,
   clipboard or component capabilities. `gpui-component` is not automatically
   part of this engine distribution or compatible with a newer GPUI cohort.
 - New or changed licenses, dependencies, assets, build inputs and native SDK
   requirements beyond the specifically approved inputs above.
-- Actual build/test and compositor evidence for each platform and capability.
-- GitHub workflow discovery, exact-head publishing identity, check results and
-  ruleset rejection behavior, until exercised and read back.
+- Other-platform builds and native compositor/GPU evidence remain separate.
+- Exercised GitHub discovery, exact-head source checks and ruleset rejections are
+  recorded in `github-route.md`. Downstream main's actual live check and required
+  rule must be verified before its acceptance; a live fork-namespace spoof test
+  remains unperformed rather than inferred from local rejection tests.
 
 Repository administrator credentials can change repository rules. These rules
 are protection against accidental/unreviewed updates, not a hard boundary
