@@ -14,8 +14,8 @@ Supported profiles:
 | `macos-x86_64` | `macos-15-intel` | `x86_64-apple-darwin` |
 | `windows-x86_64` | `windows-2025` | `x86_64-pc-windows-msvc` |
 
-Use Python 3.12 on native workers; the driver and its controlled-process tests also
-support Python 3.11 on Linux. The driver's own resolved location selects the
+The workflow pins Python 3.13.7 on native workers; the stdlib-only driver requires
+Python 3.11 or newer and its controlled-process tests also run on Linux. The driver's own resolved location selects the
 controller and `scripts/ci/rust-toolchain.toml` (Rust **1.98.1**), never candidate
 Python or a candidate toolchain pin. OS/architecture and `rustc -vV` host/release
 must match. Linux is rejected before launching anything; these are not cross-build
