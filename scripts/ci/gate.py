@@ -210,8 +210,11 @@ def native_result(api, snapshot, matrix_result):
         job = object_value(job)
         name = job.get('name')
         require(isinstance(name, str), 'invalid job name')
-        if name in ('Resolve native snapshot', 'Publish native result', 'pinrail-native-v1'):
-            continue  # GitHub can include the API-created aggregate in this collection.
+        if name in ('Resolve native snapshot', 'Publish native result',
+                    'pinrail-native-v1', 'pinrail-main-v1'):
+            # GitHub can co-list API-created aggregates, even the Linux check with
+            # this native run_id. Neither aggregate supplies native platform proof.
+            continue
         require(name in expected and name not in results, 'unknown/duplicate native job')
         job_id = number(job.get('id'))
         require(job_id not in ids, 'duplicate native job ID')
