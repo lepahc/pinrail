@@ -34,12 +34,16 @@ def commands(controller, candidate, scratch):
         ['cargo', f'+{toolchain}', 'metadata', '--locked', '--all-features', '--format-version', '1'],
         ['cargo', f'+{toolchain}', 'check', '--locked', '--workspace', '--all-targets',
          '--features', 'gpui/test-support'],
-        ['cargo', f'+{toolchain}', 'test', '--locked', '-p', 'gpui', '-p', 'gpui_linux', '-p', 'gpui_wgpu',
+        ['cargo', f'+{toolchain}', 'test', '--locked', '-p', 'gpui', '-p', 'gpui_wgpu',
          '--lib', '--features', 'gpui/test-support', '--', '--test-threads=2',
          # These atlas tests request actual adapters/devices even without a display.
          '--skip', 'wgpu_atlas::tests::before_frame_skips_uploads_for_removed_texture',
          '--skip', 'wgpu_atlas::tests::remove_deallocates_tile_space_for_reuse',
          '--skip', 'wgpu_atlas::tests::reused_texture_id_has_new_generation'],
+        # --tests includes the Linux library plus retained integration regressions;
+        # the preceding all-target check only compiles those regression harnesses.
+        ['cargo', f'+{toolchain}', 'test', '--locked', '-p', 'gpui_linux', '--tests',
+         '--features', 'gpui/test-support', '--', '--test-threads=2'],
     ]
 
 

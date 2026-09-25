@@ -33,7 +33,7 @@ def dispatch():
 
 class API:
     """Only transport is faked; no fake resolution/authorization decisions."""
-    def __init__(self):
+    def __init__(self, normalize_details_url=True):
         self.pr = pr()
         self.repo = copy.deepcopy(REPO)
         self.refs = {'main': K, 'upstream-import': B}
@@ -41,6 +41,7 @@ class API:
         self.writes = []
         self.reads = []
         self.corrupt_readback = False
+        self.normalize_details_url = normalize_details_url
 
     def call(self, method, path, body=None):
         if method == 'GET':
@@ -61,6 +62,9 @@ class API:
             value = {**body, 'id': len(self.checks) + 1,
                      'app': {'id': 15368, 'slug': 'github-actions'},
                      'html_url': 'https://github.com/lepahc/pinrail/runs/1'}
+            if self.normalize_details_url:
+                # Observed Actions behavior: persist the check URL, not the supplied run URL.
+                value['details_url'] = f"https://github.com/lepahc/pinrail/runs/{value['id']}"
             self.checks[value['id']] = value
             return copy.deepcopy(value)
         elif method == 'PATCH' and path.startswith('/check-runs/'):
@@ -99,6 +103,61 @@ class GateTests(unittest.TestCase):
         _, (snapshot, check_id) = self.start(api, evt)
         self.assertEqual(api.checks[check_id]['name'], 'pinrail-main-v1')
         self.assertEqual(gate.complete(api, snapshot, check_id, 'success')['conclusion'], 'success')
+
+    def test_actions_details_url_normalization_preserves_exact_head_completion(self):
+        run_url = 'https://github.com/lepahc/pinrail/actions/runs/42/attempts/1'
+        for normalized in (True, False):
+            with self.subTest(normalized=normalized):
+                api, (snapshot, check_id) = self.start(API(normalize_details_url=normalized))
+                self.assertEqual(api.writes[0][2]['details_url'], run_url)
+                expected_url = 'https://github.com/lepahc/pinrail/runs/1' if normalized else run_url
+                self.assertEqual(api.checks[check_id]['details_url'], expected_url)
+                self.assertEqual(api.reads[-1], f'/check-runs/{check_id}')
+                finished = gate.complete(api, snapshot, check_id, 'success')
+                self.assertEqual(finished['details_url'], expected_url)
+                self.assertEqual(finished['head_sha'], C)
+                self.assertEqual(finished['name'], 'pinrail-import-integrity-v1')
+                self.assertEqual(finished['external_id'], 'pinrail:42:1:7')
+                self.assertEqual(finished['status'], 'completed')
+                self.assertEqual(finished['conclusion'], 'success')
+                self.assertEqual(api.reads[-1], f'/check-runs/{check_id}')
+                self.assertEqual(api.reads.count(f'/check-runs/{check_id}'), 3)
+
+    def test_wrong_details_urls_fail_at_each_check_readback(self):
+        wrong_urls = (
+            'https://github.com/elsewhere/pinrail/runs/1',
+            'https://github.com/lepahc/pinrail/runs/2',
+            'https://github.com/elsewhere/pinrail/actions/runs/42/attempts/1',
+            'https://github.com/lepahc/pinrail/actions/runs/43/attempts/1',
+            'https://github.com/lepahc/pinrail/actions/runs/42/attempts/2',
+            'https://github.com/lepahc/pinrail/actions/runs/42',
+            'https://github.com/lepahc/pinrail/runs/1?other=2',
+            'https://example.invalid/check',
+            None,
+        )
+        for phase in ('resolve', 'before-patch', 'after-patch'):
+            for wrong_url in wrong_urls:
+                with self.subTest(phase=phase, details_url=wrong_url):
+                    api = API()
+                    started = None if phase == 'resolve' else self.start(api)[1]
+                    original = api.call
+
+                    def transport(method, path, body=None):
+                        value: dict = original(method, path, body)
+                        if (method == 'GET' and path.startswith('/check-runs/')
+                                and (phase != 'after-patch' or len(api.writes) == 2)):
+                            value['details_url'] = wrong_url
+                        return value
+
+                    api.call = transport
+                    with self.assertRaisesRegex(gate.GateError, 'check identity mismatch'):
+                        if started is None:
+                            self.start(api)
+                        else:
+                            gate.complete(api, *started, 'success')
+                    self.assertEqual([write[0] for write in api.writes],
+                                     ['POST', 'PATCH'] if phase == 'after-patch' else ['POST'])
+                    self.assertEqual(api.reads[-1], '/check-runs/1')
 
     def test_dispatch_reads_current_pr_and_base(self):
         api, (snapshot, check_id) = self.start(evt=dispatch(), name='repository_dispatch')
@@ -186,8 +245,10 @@ class GateTests(unittest.TestCase):
             self.assertEqual(gate.complete(api, snapshot, check_id, result)['conclusion'], expected)
 
     def test_completion_cannot_retarget_check_id_or_publisher(self):
-        for key, value in [('head_sha', D), ('name', 'pinrail-main-v1'),
-                           ('external_id', 'other-run'), ('app', {'id': 1, 'slug': 'other'})]:
+        for key, value in [('id', 2), ('head_sha', D), ('name', 'pinrail-main-v1'),
+                           ('external_id', 'other-run'), ('external_id', 'pinrail:43:1:7'),
+                           ('external_id', 'pinrail:42:2:7'), ('external_id', 'pinrail:42:1:8'),
+                           ('app', {'id': 1, 'slug': 'other'})]:
             api, (snapshot, check_id) = self.start()
             api.checks[check_id][key] = value
             with self.subTest(key=key), self.assertRaises(gate.GateError):

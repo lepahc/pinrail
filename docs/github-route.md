@@ -95,7 +95,9 @@ GitHub reviewer identity.
   importer tests which themselves invoke Cargo (the pin exists before main has
   the generated source's root toolchain file);
 - runs full all-feature locked Cargo metadata, the entire workspace all-target
-  Linux check with test support, and GPUI/Linux/wgpu headless library tests.
+  Linux check with test support, GPUI/wgpu headless library tests, and Linux
+  `--tests` so retained pointer-dispatch/offscreen integration regressions execute
+  rather than merely compile. Linux library tests run once through that command.
 
 The exact head must contain B as an ancestor; strict up-to-date checks remain
 necessary at merge time. The commands match the qualified Linux profile, use two
@@ -141,6 +143,15 @@ accepted in the payload. A changed base requires regenerating an import candidat
 main/controller requires a fresh dispatch. GitHub's old-event reruns preserve K;
 "rerun failed jobs" can also preserve an old resolver attempt, which this route
 rejects. Prefer a fresh dispatch over a partial rerun.
+
+**Check URL normalization pitfall:** GitHub Actions has returned
+`https://github.com/lepahc/pinrail/runs/<check_id>` as `details_url` instead of the
+submitted `https://github.com/lepahc/pinrail/actions/runs/<run_id>/attempts/<attempt>`.
+An echo-only API fixture missed this and resolve failed with `check identity mismatch`.
+Readback accepts only those two exact URLs for the expected repository/check/run;
+the external ID still binds run, attempt and PR, alongside head, name and publisher
+checks. Do not ignore an arbitrary URL or manually mark the check successful. After
+landing a controller repair, use a fresh dispatch and verify the exact check via GET.
 
 ## Required repository configuration — separate deployment
 
@@ -188,9 +199,12 @@ actionlint .github/workflows/verify.yml
 Tests cover malformed literal identifiers/events/payloads, repository/base
 constraints, stale head/base/controller/open state, non-success job outcomes,
 wrong check identities, exact readback, and bare candidate acquisition/receipt
-parsing/trusted runner selection. The API transport is a local test double; the
-Git fixtures are real. The fixture importer is deliberately inert and does **not**
-claim to prove Copybara regeneration. Run the separate importer proofs for that.
+parsing/trusted runner selection. The API transport is a local test double that
+models observed Actions URL normalization as well as URL echoing; it does not prove
+native API behavior or required-check eligibility. A fresh live run and exact-check
+GET readbacks remain necessary. The Git fixtures are real. The fixture importer is
+deliberately inert and does **not** claim to prove Copybara regeneration. Run the
+separate importer proofs for that.
 
 Before calling the GitHub route operational, demonstrate and retain readbacks of:
 
