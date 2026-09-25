@@ -68,6 +68,10 @@ class NativeWorkflowTests(unittest.TestCase):
             self.assertEqual(checkout['with']['repository'], 'lepahc/pinrail')
             self.assertEqual(checkout['with']['ref'], '${{ github.workflow_sha }}')
             self.assertEqual(checkout['with']['path'], 'controller')
+            # This must apply before materialization, only to the checkout action.
+            # test_windows_startup also runs real Git using these environment values.
+            self.assertEqual(checkout['env'], {'GIT_CONFIG_COUNT': '1',
+                             'GIT_CONFIG_KEY_0': 'core.autocrlf', 'GIT_CONFIG_VALUE_0': 'false'})
             for option in ('persist-credentials', 'submodules', 'lfs'):
                 self.assertIs(checkout['with'][option], False)
 

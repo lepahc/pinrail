@@ -324,8 +324,10 @@ def windows_environment(runner):
         script = installation / 'Common7/Tools/VsDevCmd.bat'
         require(script.is_file(), f'Visual Studio developer environment missing: {script}')
         require(not any(c in str(script) for c in '\r\n"%&|<>^!'), 'unsafe Visual Studio installation path')
-        output = runner.run('msvc-environment', ['cmd.exe', '/d', '/s', '/c',
-            f'call "{script}" -no_logo -arch=x64 -host_arch=x64 && set'], quiet_stdout=True)
+        # Keep cmd tokens separate: Popen's Windows list2cmdline would backslash-
+        # escape the nested path quotes in a single body, which cmd cannot parse.
+        output = runner.run('msvc-environment', ['cmd.exe', '/d', '/s', '/c', 'call',
+            str(script), '-no_logo', '-arch=x64', '-host_arch=x64', '&&', 'set'], quiet_stdout=True)
         imported = {}
         for line in output.splitlines():
             key, sep, value = line.partition('=')

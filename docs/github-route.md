@@ -158,7 +158,13 @@ commands, suite, controller, or runner. Each job has `contents: read` only, a
 60-minute limit, and no `continue-on-error`. Matrix `max-parallel: 2` bounds native
 concurrency; `fail-fast: false` lets each admitted platform report its actual result.
 Every checkout is K = `github.workflow_sha`, without persisted credentials,
-submodules or LFS. Actions are commit-pinned. `actions/setup-python` v6.2.0 is pinned
+submodules or LFS. Each native workflow checkout action sets process-scoped
+`GIT_CONFIG_COUNT=1`, `GIT_CONFIG_KEY_0=core.autocrlf`, and
+`GIT_CONFIG_VALUE_0=false` **before** materializing K. This overrides the Windows
+Git default without writing global config, aligns K with the sanitized candidate
+checkout, and preserves `.gitattributes`' exact CRLF permission notices. Neither
+the clean-tree check nor the byte-for-byte lock guard normalizes line endings.
+Actions are commit-pinned. `actions/setup-python` v6.2.0 is pinned
 to `a309ff8b426b58ec0e2a45f0f869d46889d02405` (retrieved from its tag and action source),
 with Python **3.13.7** and explicit architecture; no package cache or pip-install
 input is enabled. Both shell entrypoints invoke the action's absolute `python-path`

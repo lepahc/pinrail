@@ -41,6 +41,11 @@
       "steps": [
         {
           "uses": "actions/checkout@11d5960a326750d5838078e36cf38b85af677262",
+          "env": {
+            "GIT_CONFIG_COUNT": "1",
+            "GIT_CONFIG_KEY_0": "core.autocrlf",
+            "GIT_CONFIG_VALUE_0": "false"
+          },
           "with": {
             "repository": "lepahc/pinrail",
             "ref": "${{ github.workflow_sha }}",
@@ -95,6 +100,11 @@
       "steps": [
         {
           "uses": "actions/checkout@11d5960a326750d5838078e36cf38b85af677262",
+          "env": {
+            "GIT_CONFIG_COUNT": "1",
+            "GIT_CONFIG_KEY_0": "core.autocrlf",
+            "GIT_CONFIG_VALUE_0": "false"
+          },
           "with": {
             "repository": "lepahc/pinrail",
             "ref": "${{ github.workflow_sha }}",
@@ -159,6 +169,11 @@
       "steps": [
         {
           "uses": "actions/checkout@11d5960a326750d5838078e36cf38b85af677262",
+          "env": {
+            "GIT_CONFIG_COUNT": "1",
+            "GIT_CONFIG_KEY_0": "core.autocrlf",
+            "GIT_CONFIG_VALUE_0": "false"
+          },
           "with": {
             "repository": "lepahc/pinrail",
             "ref": "${{ github.workflow_sha }}",

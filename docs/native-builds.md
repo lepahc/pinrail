@@ -97,7 +97,11 @@ absent, but still must pass every tool probe. The driver checks `INCLUDE`/`LIB`,
 locates `cl.exe`, `link.exe`, `rc.exe`, CMake, records tool/SDK paths and versions,
 and actually compiles a C file including `windows.h`, compiles a resource and links
 a tiny executable without running it. Native command exit codes are checked
-directly, including the `cmd.exe` developer-environment wrapper.
+directly, including the `cmd.exe` developer-environment wrapper. Its `call`,
+batch path, options and `&& set` are separate subprocess arguments, so Python's
+Windows argument serialization quotes the spaced path rather than backslash-
+escaping nested quotes in a single cmd body. Environment import occurs only after
+successful batch exit; a plausible environment printed on failure is not success.
 
 FXC is resolved to **one existing executable file**: explicit `GPUI_FXC_PATH`, then
 PATH, then a numerically newest installed x64 Windows SDK. A malformed explicit
@@ -148,8 +152,21 @@ Ignored tests are not enabled. Link-only stages do not count as executed tests.
 Local verification:
 
 ```sh
-python3 -m unittest discover -s tests/ci -v
+python3 -B -m unittest discover -s tests/ci -v
+# Optional Linux cmd quoting regression (requires Wine already installed):
+PINRAIL_TEST_WINE=1 python3 -B -m unittest discover -s tests/ci -p test_windows_startup.py -v
 ```
+
+`test_windows_startup.py` uses real Git with the workflow's checkout environment,
+the actual lock/attributes/CRLF notices, and production acquisition/lock guards
+under both host line-ending policies. It also runs an inert batch file from a
+spaced path through the production VS initializer and subprocess runner, checking
+real environment import and nonzero batch exit. That cmd fixture runs directly
+on Windows; on Linux it is skipped unless explicitly opted in to Wine. The Wine
+fixture creates and tears down its own display-disconnected prefix under private
+scratch, disables display drivers, and never uses an existing/user prefix. Only
+VS discovery and Wine host-path transport are substituted. Neither this fixture
+nor Wine execution is MSVC/SDK, native build, or native Windows qualification.
 
 `tests/ci/test_native_checks.py` exercises the actual builder, environment policy,
 preflight choices, subprocess transport, time/output bounds, lock guards and
