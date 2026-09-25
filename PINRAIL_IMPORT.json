@@ -1,0 +1,108 @@
+{
+  "audit_limits": "Exact file/dependency input inventory, NOT complete file/external-license clearance. Native SDKs, dynamic build inputs and all platforms require separate review and build verification.",
+  "cargo_lock_sha256": "28b6928013a634785f7725ef0e0e65c4fa15afb0ef044a1a8dc3e22201372bfb",
+  "controller_code_sha256": "a9715e9f3c6027aa0638b94a02eda96e192f50084618ff02a86541ea763fa52f",
+  "copybara": {
+    "sha256": "3b9307e9751710f2b04422e108ccc3667b9671eb73e91ea264f5f3baaae2f771",
+    "source": "db68b8a5b5a4e8fec45877c11b19ef9af2bdbc4a",
+    "url": "https://github.com/google/copybara/releases/download/v20260921/copybara_deploy.jar",
+    "version": "v20260921"
+  },
+  "inventory_sha256": "3b89ab7caa50445bd2ce3f69423a096abd158268dea71691b579ce116828aaf5",
+  "license_findings": [
+    {
+      "input": "crates/gpui/examples/svg/dragon.svg",
+      "license": "CC-BY-SA-3.0",
+      "role": "OMITTED together with SVG example target/source"
+    },
+    {
+      "input": "assets/fonts/ibm-plex-sans",
+      "license": "OFL-1.1",
+      "role": "web example font assets; reserved Plex name"
+    },
+    {
+      "input": "assets/fonts/lilex",
+      "license": "OFL-1.1",
+      "role": "web example font assets"
+    },
+    {
+      "input": "cbindgen",
+      "license": "MPL-2.0",
+      "role": "external macOS build tool, not a runtime-linking claim"
+    }
+  ],
+  "lock_policy": "Reviewed all-platform Cargo lock pruning only. Every package version/source/checksum and dependency edge is checked against the original upstream lock. Root patches are restricted to that original selected cohort.",
+  "omitted_files": [
+    "crates/gpui/examples/svg/dragon.svg",
+    "crates/gpui/examples/svg/svg.rs"
+  ],
+  "origin": "https://github.com/zed-industries/zed.git",
+  "package_dirs": [
+    "crates/collections",
+    "crates/gpui",
+    "crates/gpui_apple",
+    "crates/gpui_linux",
+    "crates/gpui_macos",
+    "crates/gpui_macros",
+    "crates/gpui_platform",
+    "crates/gpui_shared_string",
+    "crates/gpui_util",
+    "crates/gpui_web",
+    "crates/gpui_wgpu",
+    "crates/gpui_windows",
+    "crates/http_client",
+    "crates/http_client_tls",
+    "crates/path",
+    "crates/refineable",
+    "crates/refineable/derive_refineable",
+    "crates/reqwest_client",
+    "crates/scheduler",
+    "crates/sum_tree",
+    "crates/util",
+    "crates/util_macros",
+    "crates/zlog",
+    "crates/ztracing",
+    "crates/ztracing_macro",
+    "tooling/corgi/patches/scratch",
+    "tooling/perf"
+  ],
+  "provenance_policy": "GitOrigin-RevId is the exact requested snapshot. Copybara-Path-RevId is Copybara native history/resumption (last path-affecting revision or forced checkpoint); raw selected trees must be identical at both revisions.",
+  "reviewed_baseline_sha256": "e1020618602eda393791700c24064cdc95b22473d0e9bb21d1fad5ee733c1cf4",
+  "root_patches": {
+    "crates-io": {
+      "async-process": {
+        "git": "https://github.com/zed-industries/async-process.git",
+        "rev": "0b6d6713570af61806e1e5cb40e0f757cb93fd9d"
+      },
+      "async-task": {
+        "git": "https://github.com/smol-rs/async-task.git",
+        "rev": "b4486cd71e4e94fbda54ce6302444de14f4d190e"
+      },
+      "calloop": {
+        "git": "https://github.com/zed-industries/calloop"
+      },
+      "scratch": {
+        "path": "tooling/corgi/patches/scratch"
+      },
+      "windows-capture": {
+        "git": "https://github.com/zed-industries/windows-capture.git",
+        "rev": "f0d6c1b6691db75461b732f6d5ff56eed002eeb9"
+      }
+    }
+  },
+  "schema": 1,
+  "scope": "reviewed-source-import",
+  "supplemental_notices": {
+    "LICENSE-MICROSOFT-MIT": {
+      "applies_to": [
+        "crates/gpui/src/platform.rs",
+        "crates/gpui_wgpu/src/shaders.wgsl",
+        "crates/gpui_windows/src/alpha_correction.hlsl"
+      ],
+      "controller_path": "docs/licenses/microsoft-terminal-MIT.txt",
+      "sha256": "5d177f23ecfeb0ea8e050b6a5a16355e1ae9a0b286436ca8f83ed08b3795be6b",
+      "source": "https://raw.githubusercontent.com/microsoft/terminal/1283c0f5b99a2961673249fa77c6b986efb5086c/LICENSE"
+    }
+  },
+  "upstream": "2c4bc2d7b2c5b7832ad964f39840d823d961cb0e"
+}
