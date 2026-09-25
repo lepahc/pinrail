@@ -212,6 +212,26 @@ release-state failures. Blocked delivery remains rejected by the production
 window handler; seat cleanup no longer depends on delivery admission. These are
 source-bound control-flow and compile results, not native compositor acceptance.
 
+## Spring animation clock
+
+Spring element layout now samples `cx.background_executor().now()` for both
+initialization and stepping instead of bypassing the app clock with
+`Instant::now()`. The latter ignored the test executor's 50ms advance; the real
+macOS ARM64 run `36091732474` failed the retargeting test's positive-position
+assertion. Frame callbacks already notify and redraw the view. The production
+platform clock still delegates to the dispatcher's monotonic clock; no spring
+physics, playback rules, frame delivery, or existing assertions change.
+
+The new real-layout regression checks independently derived positions at 50ms
+and 100ms, a mount after the app epoch, and unchanged position on frames with no
+clock advance. Before the repair it failed locally with `0.000289917px` instead
+of `11.84536px`; afterward it and the original retargeting test pass. Bounded,
+display-unset Linux CPU checks passed all **12 animation tests** and **11 spring
+physics tests**, plus scoped rustfmt and diff checks. The original test passed
+locally even before repair; these results do not claim a reproduced native
+failure or native acceptance. Actual macOS/Windows qualification remains required.
+The locked **875-package** cohort is unchanged.
+
 ## Deferred, not silently preserved
 
 No retained layer transitions/remap receipts, capture, no-focus clipboard,
