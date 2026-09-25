@@ -36,8 +36,35 @@ systemd-run --user --wait --pipe --collect \
 Three atlas tests explicitly request GPU devices and are excluded from this
 CPU-only profile. Removing display variables alone does not prevent GPU use.
 Headless control-flow tests do not establish compositor, native focus/IME, pixel,
-or presentation behavior. Other platforms are retained but not execution-qualified.
-The separate `hello_web` example workspace is not covered by root-workspace gates.
+or presentation behavior. The separate `hello_web` example workspace is not
+covered by root-workspace gates.
+
+### macOS and Windows
+
+[Native build/test profiles](docs/native-builds.md) prescribe Rust **1.98.1**
+checks on three explicit standard hosted images:
+
+- `macos-arm64`: `macos-15`, native Apple Silicon, default Metal shader generation.
+- `macos-x86_64`: `macos-15-intel`, native Intel, the same Metal/text profile.
+- `windows-x86_64`: `windows-2025`, MSVC/Windows SDK with an FXC release-path smoke.
+
+The profiles check the native adapter, link test binaries, execute explicit
+nonzero CPU-test selections, and build—but never launch—the hello-world example.
+The macOS profile includes real native text; the Windows release-path smoke is
+bounded and is not a production-optimized release build. The lock must remain
+byte-identical to the trusted controller's reviewed cohort.
+
+`.github/workflows/native.yml` runs the controller-sourced driver against the
+exact downstream PR head on secret-free workers. Its separate `pinrail-native-v1`
+check succeeds only when all three native jobs succeed and PR/head/base/controller
+identity remains current. An installed profile is not itself a passing platform
+result: use that exact-head check and its linked job logs for qualification.
+The existing `pinrail-main-v1` remains Linux/importer verification, not an alias
+for native coverage. See [the route and retry instructions](docs/github-route.md).
+
+GPU/interactive GUI tests, focus/IME, clipboard integration, accessibility,
+minimum-OS compatibility, signing and packaging are outside these profiles.
+Windows ARM64, browser/WASM and FreeBSD execution remain separate follow-ups.
 
 ## Downstream scope
 
