@@ -100,7 +100,8 @@ remain separate checks, not implied by the source-compatible API.
 
 Review target: `e8828a381dad39faed387aaad040613971af4090`, cherry-picked onto
 standalone import `f1253a7f760652272d4e28229295b11f9b8b4283`.
-**Changes requested; not approved for landing.**
+**Original review requested changes; the G3 blocker is repaired and independently
+approved in the closure section below.**
 
 - **G3 regression:** `client.rs:2321-2323` rejects both presses and releases when
   the target is blocked. A press followed by a blocking Dialog child and then a
@@ -137,10 +138,10 @@ resize/acquire/reconfigure/present paths, and L1 configure/close/resource guards
 were source-traced. The existing helper tests do not establish actual calloop
 admission failure, WSI-internal geometry atomicity, native focus/IME or compositor
 acceptance. No GUI/compositor/GPU-device work or other-platform execution was
-performed. The blocker must be fixed and its dispatcher-level regression rerun
-before approval.
+performed in that review. Its blocker was subsequently repaired and the
+dispatcher-level regression was independently rerun before approval.
 
-### G3 release repair — pending independent closure review
+### G3 release repair — independently approved
 
 The repair scopes the original-target lookup and blocked-window guard to the
 Pressed arm. The Released arm again clears seat state before any optional window
@@ -203,8 +204,13 @@ Local evidence is retained separately from the original review evidence in
 gate logs. The summary records exact gate arguments, tested source digests,
 environment and unchanged lock digest. Cargo.lock remains byte-identical to the
 standalone import with **875 package identities**. Original reviewer notes and
-probe evidence are preserved. This repair is submitted for independent re-review,
-not marked approved by its implementer.
+probe evidence are preserved. A separate closure review approved the repair at
+`5367a01fcb55226f68374204924774782eb9e336`: it reran the ten dispatcher cases,
+the eighteen overlapping helper cases, scoped formatting and diff checks, and
+independently reconstructed the exact pre-fix source probe to reproduce both
+release-state failures. Blocked delivery remains rejected by the production
+window handler; seat cleanup no longer depends on delivery admission. These are
+source-bound control-flow and compile results, not native compositor acceptance.
 
 ## Deferred, not silently preserved
 
