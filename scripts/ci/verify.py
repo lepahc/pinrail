@@ -4,6 +4,7 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+import tempfile
 
 from gate import GateError, REPOSITORY, require, runtime_snapshot, sha, snapshot_value
 
@@ -11,19 +12,32 @@ REMOTE = f'https://github.com/{REPOSITORY}.git'
 ROOT = Path(__file__).resolve().parents[2]
 
 
-def git(repo, *args):
-    env = dict(os.environ, GIT_CONFIG_NOSYSTEM='1', GIT_CONFIG_GLOBAL='/dev/null',
+def git_environment():
+    # No ambient Git overrides, credentials, replacement objects, or user filters.
+    env = {key: value for key, value in os.environ.items()
+           if not key.upper().startswith('GIT_') and key.upper() != 'SSH_ASKPASS'}
+    env.update(GIT_CONFIG_NOSYSTEM='1', GIT_CONFIG_GLOBAL=os.devnull,
                GIT_TERMINAL_PROMPT='0', GIT_NO_REPLACE_OBJECTS='1')
+    return env
+
+
+def git(repo, *args):
     try:
-        return subprocess.check_output(
-            ['git', '-c', 'core.hooksPath=/dev/null', '-C', str(repo), *args],
-            env=env, stderr=subprocess.PIPE, timeout=600)
+        # A real empty directory works on Windows too; NUL is not a hook directory.
+        # Its parent is owned workspace scratch/controller, never system /tmp.
+        with tempfile.TemporaryDirectory(prefix='pinrail-no-hooks-',
+                                         dir=Path(repo).resolve().parent) as hooks:
+            return subprocess.check_output(
+                ['git', '-c', f'core.hooksPath={hooks}', '-c', 'core.autocrlf=false',
+                 '-c', 'core.longpaths=true', '-c', 'core.fsmonitor=false',
+                 '-C', str(repo), *args], env=git_environment(),
+                stderr=subprocess.PIPE, timeout=600)
     except subprocess.CalledProcessError as exc:
         raise GateError('Git object acquisition/inspection failed') from exc
 
 
-def acquire(snapshot, scratch, remote=REMOTE):
-    snapshot_value(snapshot)
+def acquire(snapshot, scratch, remote=REMOTE, *, suite='legacy'):
+    snapshot_value(snapshot, suite=suite)
     scratch = Path(scratch).resolve()
     scratch.mkdir(parents=True, exist_ok=False)
     objects = scratch / 'objects.git'
@@ -77,14 +91,13 @@ def import_command(controller, objects, snapshot, scratch):
 
 
 def worker_environment(scratch):
-    env = {key: value for key, value in os.environ.items()
-           if key not in {'GH_TOKEN', 'GITHUB_TOKEN', 'ACTIONS_RUNTIME_TOKEN',
-                          'ACTIONS_ID_TOKEN_REQUEST_TOKEN', 'GITHUB_OUTPUT', 'GITHUB_ENV',
-                          'GITHUB_PATH', 'GITHUB_STATE', 'GITHUB_STEP_SUMMARY'}}
+    env = {key: value for key, value in git_environment().items()
+           if not key.upper().startswith(('GH_', 'GITHUB_', 'ACTIONS_', 'PYTHON'))
+           and key.upper() not in {'SNAPSHOT', 'CHECK_ID', 'CONTROLLER_SHA', 'VERIFY_RESULT'}}
     tmp = Path(scratch).resolve() / 'tmp'
     tmp.mkdir(parents=True, exist_ok=True)
     env.update(TMPDIR=str(tmp), TMP=str(tmp), TEMP=str(tmp), PYTHONDONTWRITEBYTECODE='1',
-               GIT_CONFIG_NOSYSTEM='1', GIT_CONFIG_GLOBAL='/dev/null', GIT_TERMINAL_PROMPT='0',
+               GIT_CONFIG_NOSYSTEM='1', GIT_CONFIG_GLOBAL=os.devnull, GIT_TERMINAL_PROMPT='0',
                GIT_NO_REPLACE_OBJECTS='1')
     # Preserve the workflow's pinned setup-java environment. Copybara v20260921
     # contains Java class version 69 and cannot run on the runner's Java 21.
