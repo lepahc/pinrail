@@ -208,6 +208,17 @@ movement, closing/retargeting or repository drift also fail completion on origin
 If cancellation prevents the publisher from running, the in-progress check is not
 success. A malformed API response cannot be manually waived into a green check.
 
+**Jobs API presentation pitfall:** The exact-attempt native jobs response has
+included the API-created Linux `pinrail-main-v1` check, labeled with the native
+`run_id` even though its check `external_id` binds the Linux run. The gate ignores
+that exact reserved name alongside `pinrail-native-v1` and the native resolver/
+publisher jobs. Neither aggregate's status or conclusion supplies platform proof
+or vetoes otherwise valid native results. The declared total still covers every
+returned entry; all three native workers must independently pass the unchanged
+name/ID/run/attempt/completion checks. Other job names still fail closed.
+`test_native_gate.py` retains the observed six-entry response shape with explicitly
+synthetic completion fixtures; passing those tests is not live native qualification.
+
 Retry only the exact current head of an eligible main-target PR:
 
 ```sh
