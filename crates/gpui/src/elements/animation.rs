@@ -268,7 +268,7 @@ impl<E: IntoElement + 'static> Element for SpringAnimationElement<E> {
         cx: &mut App,
     ) -> (crate::LayoutId, Self::RequestLayoutState) {
         window.with_element_state(global_id.unwrap(), |state, window| {
-            let now = Instant::now();
+            let now = cx.background_executor().now();
             let initial = self.initial.unwrap_or(self.target);
             let mut state = state.unwrap_or_else(|| SpringElementState {
                 spring: SpringState {
@@ -711,6 +711,45 @@ mod tests {
                 |element, value| element.left(value),
             )
             .child(div());
+    }
+
+    #[gpui::test]
+    fn test_spring_animation_advances_only_with_app_clock(cx: &mut TestAppContext) {
+        // Mount away from the app's epoch: elapsed time starts at the first layout.
+        cx.executor().advance_clock(Duration::from_secs(86_400));
+        let rendered_values = Rc::new(RefCell::new(Vec::new()));
+        let window = cx.open_window(size(px(100.0), px(100.0)), {
+            let rendered_values = rendered_values.clone();
+            move |_, _| SpringAnimationTestView {
+                target: px(100.0),
+                initial: Some(px(0.0)),
+                playback: SpringPlayback::Running,
+                rendered_values,
+            }
+        });
+        cx.run_until_parked();
+        assert_eq!(*rendered_values.borrow(), vec![px(0.0)]);
+
+        // For k=100, c=2, m=1 and x(0)=x'(0)=0, the independent solution is
+        // x(t) = 100 * (1 - exp(-t) * (cos(sqrt(99)*t) + sin(sqrt(99)*t)/sqrt(99))).
+        // These are its positions at 50ms and 100ms, not samples of host elapsed time.
+        for expected in [11.84536, 43.10281] {
+            let previous_frames = rendered_values.borrow().len();
+            cx.executor().advance_clock(Duration::from_millis(50));
+            assert_eq!(simulate_next_frame(&window, cx), 1);
+            assert_eq!(rendered_values.borrow().len(), previous_frames + 1);
+            let actual = *rendered_values.borrow().last().unwrap();
+            assert!(
+                (actual - px(expected)).abs() < px(0.0001),
+                "expected {expected}px from the app clock, got {actual:?}"
+            );
+
+            // Deliver another real layout without advancing the clock. A frame
+            // callback is not itself elapsed time, even while the spring is moving.
+            assert_eq!(simulate_next_frame(&window, cx), 1);
+            assert_eq!(rendered_values.borrow().len(), previous_frames + 2);
+            assert_eq!(*rendered_values.borrow().last().unwrap(), actual);
+        }
     }
 
     #[gpui::test]
