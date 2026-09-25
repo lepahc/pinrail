@@ -101,8 +101,9 @@ GitHub reviewer identity.
 
 The exact head must contain B as an ancestor; strict up-to-date checks remain
 necessary at merge time. The commands match the qualified Linux profile, use two
-Cargo jobs/test threads and disable dev/test debug information. A passing native
-check is not GPU/compositor, other-platform or application qualification.
+Cargo jobs/test threads and disable dev/test debug information. A passing
+`pinrail-main-v1` is Linux evidence, not GPU/compositor, other-platform or
+application qualification.
 The three `wgpu_atlas` tests that request actual adapters/devices are explicitly
 excluded by full test name; removing display variables alone is not CPU isolation.
 Compilation can execute candidate build scripts; never move it into a write-token
@@ -117,6 +118,125 @@ version/checksum-pinned with cache upload disabled. Copybara and Python hashes
 belong to the importer. The hosted
 runner image and Ubuntu package repository are not immutable build environments.
 Temporary directories are under the workspace `.scratch`, not `/tmp`.
+
+## Native extension: separately qualified exact-head aggregate
+
+`.github/workflows/native.yml` adds **`pinrail-native-v1`**, not another
+`pinrail-main-v1`. Historical Linux greens never count as native qualification.
+The new workflow admits automatic `pull_request_target` events **only into main**
+and the separate `repository_dispatch` event `pinrail-native-verify`. Same-repository,
+open/unmerged PR admission and current controller/base/head checks remain mandatory.
+Import-target PRs are rejected before creating a check or scheduling native work;
+native workers never install or run the importer, Java, or uv.
+
+The workflow is written in YAML's JSON subset so stdlib-only CI tests can inspect
+its event/job/permission/matrix structure without adding a YAML dependency. It is
+also validated with actionlint. The existing Linux/import workflow and its default
+gate command, snapshot schema, check names and external IDs remain compatible.
+The native resolver/publisher explicitly invoke `gate.py ... --suite native-v1`:
+
+- Native snapshots require `suite: native-v1`. Other suites/extra fields fail;
+  legacy snapshots are not native authorization and vice versa.
+- Native checks use external ID `pinrail:native-v1:RUN:ATTEMPT:PR` and bind exact C,
+  native check name, run URL (or GitHub's exact normalized check URL), and observed
+  GitHub Actions publisher integration **15368**. Identity is read back after
+  creation and before/after completion PATCH, using the shared gate logic.
+- Resolve and complete stay on Ubuntu 24.04 with five-minute limits. Complete adds
+  `actions: read` solely to read this run attempt's job conclusions. Neither job
+  materializes C or consumes worker artifacts, caches, outputs, or executable files.
+
+### Fixed read-only native matrix
+
+| Platform argument | Standard hosted runner | Python architecture |
+| --- | --- | --- |
+| `macos-arm64` | `macos-15` | `arm64` |
+| `macos-x86_64` | `macos-15-intel` | `x64` |
+| `windows-x86_64` | `windows-2025` | `x64` |
+
+All three platforms are mandatory; dispatch cannot select a subset or override
+commands, suite, controller, or runner. Each job has `contents: read` only, a
+60-minute limit, and no `continue-on-error`. Matrix `max-parallel: 2` bounds native
+concurrency; `fail-fast: false` lets each admitted platform report its actual result.
+Every checkout is K = `github.workflow_sha`, without persisted credentials,
+submodules or LFS. Each native workflow checkout action sets process-scoped
+`GIT_CONFIG_COUNT=1`, `GIT_CONFIG_KEY_0=core.autocrlf`, and
+`GIT_CONFIG_VALUE_0=false` **before** materializing K. This overrides the Windows
+Git default without writing global config, aligns K with the sanitized candidate
+checkout, and preserves `.gitattributes`' exact CRLF permission notices. Neither
+the clean-tree check nor the byte-for-byte lock guard normalizes line endings.
+Actions are commit-pinned. `actions/setup-python` v6.2.0 is pinned
+to `a309ff8b426b58ec0e2a45f0f869d46889d02405` (retrieved from its tag and action source),
+with Python **3.13.7** and explicit architecture; no package cache or pip-install
+input is enabled. Both shell entrypoints invoke the action's absolute `python-path`
+with `-E -s -B`, not a Windows Store alias or an ambient Python chosen from C.
+The published Python version manifest lists all three selected OS/architecture assets.
+
+`native_verify.py` reuses the read-only Git adapter. It validates native snapshot,
+platform, clean controller checkout and exact K before acquisition; fetches B/C
+from the fixed repository into a fresh bare object store; verifies both SHAs and
+B ancestry; then creates a clean detached worktree at C. It neither resets nor
+reuses old worktrees. Git ignores system/user configuration and ambient Git
+overrides; `os.devnull` supplies the platform's null config path, a private empty
+directory disables hooks portably, and checkout disables automatic CRLF conversion.
+The candidate subprocess receives private workspace-local TMPDIR/TMP/TEMP and no
+GH/GITHUB/ACTIONS control variables, ambient Python path, Git injection settings or
+display connection. This is an ephemeral read-only job boundary, not a sandbox
+against runner escapes or arbitrary native build-script behavior.
+
+Only K's driver is executed, using this fixed interface:
+
+```text
+python <controller>/scripts/ci/native_checks.py \
+  --platform {macos-arm64,macos-x86_64,windows-x86_64} \
+  --candidate <absolute-downstream-worktree>
+```
+
+That driver owns native host/SDK/toolchain preflight, compile/link and explicitly
+selected CPU tests. The adapter limits it to 3300 seconds within the job's outer
+60-minute budget. It does not run a GUI or promote a check based on a log string.
+
+### Aggregate completion and retry
+
+Completion requires both `needs.verify.result == success` **and** exactly one
+completed successful job for each fixed `Native worker (PLATFORM)` name in
+`GET /actions/runs/RUN/attempts/ATTEMPT/jobs`. The gate validates job run/attempt/ID,
+complete collection count, unique required names/IDs, and admitted conclusions.
+It never relies on a matrix job output that another leg could overwrite. Missing,
+duplicate, unknown, truncated or old-attempt job metadata is rejected, leaving no
+new success. Failed/cancelled/skipped jobs fail the aggregate. Head/base/controller
+movement, closing/retargeting or repository drift also fail completion on original C.
+If cancellation prevents the publisher from running, the in-progress check is not
+success. A malformed API response cannot be manually waived into a green check.
+
+Retry only the exact current head of an eligible main-target PR:
+
+```sh
+gh api --method POST repos/lepahc/pinrail/dispatches \
+  -f event_type=pinrail-native-verify \
+  -F "client_payload[pr]=$PR_NUMBER" \
+  -f "client_payload[head_sha]=$CANDIDATE_SHA"
+```
+
+Prefer a fresh dispatch to partial job reruns: snapshots and all platform results
+are bound to one run attempt. Native retry does not refresh the separate Linux
+`pinrail-main-v1` check. No Actions execution-policy change is needed or permitted;
+keep the all-path, no-exemption policy admitting only the two existing event types.
+
+**Installation is not native qualification.** Bootstrap the controller through an
+ordinary PR and the existing strict Linux requirement. Keep the native check
+non-required until a subsequent exact-head PR demonstrates all three real hosted
+profiles, native shader/link evidence, nonzero selected tests, and authoritative
+check GET readbacks/eligibility. Only then separately promote `pinrail-native-v1`
+as an additional strict, app-bound requirement alongside `pinrail-main-v1`. This
+source change installs no branch rule and claims no successful macOS/Windows run.
+GPU/native pixels, IME/focus/clipboard, minimum OS versions, signing, packaging,
+releases, Windows ARM64 and WASM remain outside this qualification.
+
+Local `tests/ci/test_native_gate.py` uses a transport double but real authorization,
+freshness and publishing decisions; `test_native_verify.py` uses real Git fixtures
+and a real inert trusted-driver subprocess (not native builds). Workflow regression
+tests cover event, job, permissions, fixed runner matrix, limits and fail-closed
+completion wiring. These proofs do not replace live native or GitHub acceptance.
 
 ## Local producer and explicit retry
 
@@ -193,7 +313,7 @@ Local, network-free controller/real-Git adapter tests:
 ```sh
 PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s tests/ci -v
 # If installed, also validate Actions expressions and schema:
-actionlint .github/workflows/verify.yml
+actionlint .github/workflows/verify.yml .github/workflows/native.yml
 ```
 
 Tests cover malformed literal identifiers/events/payloads, repository/base

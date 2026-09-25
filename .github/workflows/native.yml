@@ -1,0 +1,200 @@
+{
+  "name": "Trusted native candidate verification",
+  "on": {
+    "pull_request_target": {
+      "branches": [
+        "main"
+      ],
+      "types": [
+        "opened",
+        "synchronize",
+        "reopened",
+        "edited",
+        "ready_for_review"
+      ]
+    },
+    "repository_dispatch": {
+      "types": [
+        "pinrail-native-verify"
+      ]
+    }
+  },
+  "permissions": {},
+  "env": {
+    "CONTROLLER_SHA": "${{ github.workflow_sha }}",
+    "PYTHONDONTWRITEBYTECODE": "1"
+  },
+  "jobs": {
+    "resolve": {
+      "name": "Resolve native snapshot",
+      "runs-on": "ubuntu-24.04",
+      "timeout-minutes": 5,
+      "permissions": {
+        "contents": "read",
+        "pull-requests": "read",
+        "checks": "write"
+      },
+      "outputs": {
+        "snapshot": "${{ steps.start.outputs.snapshot }}",
+        "check_id": "${{ steps.start.outputs.check_id }}"
+      },
+      "steps": [
+        {
+          "uses": "actions/checkout@11d5960a326750d5838078e36cf38b85af677262",
+          "env": {
+            "GIT_CONFIG_COUNT": "1",
+            "GIT_CONFIG_KEY_0": "core.autocrlf",
+            "GIT_CONFIG_VALUE_0": "false"
+          },
+          "with": {
+            "repository": "lepahc/pinrail",
+            "ref": "${{ github.workflow_sha }}",
+            "path": "controller",
+            "persist-credentials": false,
+            "fetch-depth": 1,
+            "submodules": false,
+            "lfs": false,
+            "sparse-checkout": "scripts/ci"
+          }
+        },
+        {
+          "id": "start",
+          "run": "python3 -E -s -B controller/scripts/ci/gate.py resolve --suite native-v1",
+          "env": {
+            "GH_TOKEN": "${{ github.token }}"
+          }
+        }
+      ]
+    },
+    "verify": {
+      "name": "Native worker (${{ matrix.platform }})",
+      "needs": "resolve",
+      "runs-on": "${{ matrix.runner }}",
+      "timeout-minutes": 60,
+      "permissions": {
+        "contents": "read"
+      },
+      "strategy": {
+        "fail-fast": false,
+        "max-parallel": 2,
+        "matrix": {
+          "include": [
+            {
+              "platform": "macos-arm64",
+              "runner": "macos-15",
+              "python-architecture": "arm64"
+            },
+            {
+              "platform": "macos-x86_64",
+              "runner": "macos-15-intel",
+              "python-architecture": "x64"
+            },
+            {
+              "platform": "windows-x86_64",
+              "runner": "windows-2025",
+              "python-architecture": "x64"
+            }
+          ]
+        }
+      },
+      "steps": [
+        {
+          "uses": "actions/checkout@11d5960a326750d5838078e36cf38b85af677262",
+          "env": {
+            "GIT_CONFIG_COUNT": "1",
+            "GIT_CONFIG_KEY_0": "core.autocrlf",
+            "GIT_CONFIG_VALUE_0": "false"
+          },
+          "with": {
+            "repository": "lepahc/pinrail",
+            "ref": "${{ github.workflow_sha }}",
+            "path": "controller",
+            "persist-credentials": false,
+            "fetch-depth": 1,
+            "submodules": false,
+            "lfs": false
+          }
+        },
+        {
+          "id": "python",
+          "uses": "actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405",
+          "with": {
+            "python-version": "3.13.7",
+            "architecture": "${{ matrix.python-architecture }}",
+            "check-latest": false,
+            "allow-prereleases": false,
+            "freethreaded": false,
+            "update-environment": false
+          }
+        },
+        {
+          "name": "Verify exact native snapshot (macOS)",
+          "if": "runner.os == 'macOS'",
+          "shell": "bash",
+          "run": "\"$TRUSTED_PYTHON\" -E -s -B controller/scripts/ci/native_verify.py --platform \"$NATIVE_PLATFORM\"",
+          "env": {
+            "TRUSTED_PYTHON": "${{ steps.python.outputs.python-path }}",
+            "NATIVE_PLATFORM": "${{ matrix.platform }}",
+            "SNAPSHOT": "${{ needs.resolve.outputs.snapshot }}"
+          }
+        },
+        {
+          "name": "Verify exact native snapshot (Windows)",
+          "if": "runner.os == 'Windows'",
+          "shell": "pwsh",
+          "run": "& $env:TRUSTED_PYTHON -E -s -B controller/scripts/ci/native_verify.py --platform $env:NATIVE_PLATFORM\nif ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }",
+          "env": {
+            "TRUSTED_PYTHON": "${{ steps.python.outputs.python-path }}",
+            "NATIVE_PLATFORM": "${{ matrix.platform }}",
+            "SNAPSHOT": "${{ needs.resolve.outputs.snapshot }}"
+          }
+        }
+      ]
+    },
+    "complete": {
+      "name": "Publish native result",
+      "needs": [
+        "resolve",
+        "verify"
+      ],
+      "if": "always() && needs.resolve.result == 'success'",
+      "runs-on": "ubuntu-24.04",
+      "timeout-minutes": 5,
+      "permissions": {
+        "contents": "read",
+        "pull-requests": "read",
+        "actions": "read",
+        "checks": "write"
+      },
+      "steps": [
+        {
+          "uses": "actions/checkout@11d5960a326750d5838078e36cf38b85af677262",
+          "env": {
+            "GIT_CONFIG_COUNT": "1",
+            "GIT_CONFIG_KEY_0": "core.autocrlf",
+            "GIT_CONFIG_VALUE_0": "false"
+          },
+          "with": {
+            "repository": "lepahc/pinrail",
+            "ref": "${{ github.workflow_sha }}",
+            "path": "controller",
+            "persist-credentials": false,
+            "fetch-depth": 1,
+            "submodules": false,
+            "lfs": false,
+            "sparse-checkout": "scripts/ci"
+          }
+        },
+        {
+          "run": "python3 -E -s -B controller/scripts/ci/gate.py complete --suite native-v1",
+          "env": {
+            "GH_TOKEN": "${{ github.token }}",
+            "SNAPSHOT": "${{ needs.resolve.outputs.snapshot }}",
+            "CHECK_ID": "${{ needs.resolve.outputs.check_id }}",
+            "VERIFY_RESULT": "${{ needs.verify.result }}"
+          }
+        }
+      ]
+    }
+  }
+}
