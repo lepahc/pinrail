@@ -219,8 +219,50 @@ Before calling the GitHub route operational, demonstrate and retain readbacks of
 5. Real accepted merge ancestry/tree/provenance, subsequent importer resumption,
    and downstream compile/regression success without live-desktop interaction.
 
-This implementation was locally tested, not deployed by its author. No remote
-settings, checks, workflows, PRs or branch refs were written during implementation.
+### Bootstrap deployment evidence
+
+The controller landed through [PR #1](https://github.com/lepahc/pinrail/pull/1)
+and its live readback/native-test repair through
+[PR #3](https://github.com/lepahc/pinrail/pull/3). The generated source landed
+through [PR #2](https://github.com/lepahc/pinrail/pull/2), preserving candidate
+`f0ed7dfd77382c0865f3be016d61d97a0ea1de43` and accepted import merge
+`e85dd4a8848dcf41e7b442ddf8feeb3d40890183`.
+
+- Fresh repository-dispatch [run 36075901062](https://github.com/lepahc/pinrail/actions/runs/36075901062)
+  regenerated the exact source tree successfully. Check `107886935244` was read
+  back on the candidate SHA with publisher `github-actions`, integration ID
+  `15368`; GitHub recognized it as required and accepted the ordinary PR merge.
+- [PR #4](https://github.com/lepahc/pinrail/pull/4) added a candidate workflow to
+  an otherwise valid import. Its automatic target-event verifier rejected the
+  extra path; exact-head check `107887277984` failed and the PR was blocked.
+  The candidate's same-name push and ordinary PR workflows produced startup
+  failures with no jobs/checks. The push annotation explicitly reported the
+  disallowed event. The negative PR was closed and its branch removed.
+- All-path Actions policy `5570` admits only `pull_request_target` and
+  `repository_dispatch`, without exemptions. Both branch rules require PRs and
+  merge ancestry, forbid deletion/non-fast-forward updates, and have no bypass.
+  The upstream-import rule additionally requires strict
+  `pinrail-import-integrity-v1`, bound to observed integration `15368`.
+- A disposable ref with an exact copy of the import rules rejected a direct
+  update, force update, deletion and [PR #5](https://github.com/lepahc/pinrail/pull/5)
+  merge without its required check. Each failed write left the ref unchanged.
+  That PR, temporary rule and both probe refs were subsequently cleaned up.
+- Running the importer against accepted merge `e85dd4a` with controller
+  `edd80846b0de3f2097df3e21e62cbfea5aace7c1` returned `noop: true`, the same
+  accepted commit/tree, and `checkpoint_update: false`.
+- The combined downstream tree passed full locked metadata (875 packages,
+  27 members), workspace all-target checking, 27 CI and 30 importer tests,
+  452 CPU-only library tests, 18 overlapping offscreen helpers, and the retained
+  dispatcher wrapper's ten regression cases. Three GPU-device tests were
+  explicitly filtered. Downstream acceptance must still bind its actual PR head
+  to a live `pinrail-main-v1` result and enable that strict required context before
+  merging; consult current PR/check/ruleset readbacks, not this historical note.
+
+This establishes the exercised same-repository paths, not the entire checklist:
+no live fork-namespace spoof probe was performed. Fork heads are deliberately
+unsupported and rejected in controller tests. Staleness/cancellation coverage is
+local contract coverage unless accompanied by a specific live run. Native
+compositor/GPU and non-Linux execution remain unqualified.
 
 ### GitHub sources
 
