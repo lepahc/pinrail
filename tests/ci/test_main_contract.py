@@ -42,12 +42,15 @@ class MainContractTests(unittest.TestCase):
         self.assertIn(['cargo', '+1.98.1', 'metadata', '--locked', '--all-features', '--format-version', '1'], commands)
         self.assertIn(['cargo', '+1.98.1', 'check', '--locked', '--workspace', '--all-targets',
                        '--features', 'gpui/test-support'], commands)
-        self.assertEqual(commands[-1], ['cargo', '+1.98.1', 'test', '--locked', '-p', 'gpui',
-                                       '-p', 'gpui_linux', '-p', 'gpui_wgpu', '--lib',
-                                       '--features', 'gpui/test-support', '--', '--test-threads=2',
-                                       '--skip', 'wgpu_atlas::tests::before_frame_skips_uploads_for_removed_texture',
-                                       '--skip', 'wgpu_atlas::tests::remove_deallocates_tile_space_for_reuse',
-                                       '--skip', 'wgpu_atlas::tests::reused_texture_id_has_new_generation'])
+        library = next(c for c in commands if '--lib' in c)
+        self.assertEqual(library, ['cargo', '+1.98.1', 'test', '--locked', '-p', 'gpui',
+                                  '-p', 'gpui_wgpu', '--lib',
+                                  '--features', 'gpui/test-support', '--', '--test-threads=2',
+                                  '--skip', 'wgpu_atlas::tests::before_frame_skips_uploads_for_removed_texture',
+                                  '--skip', 'wgpu_atlas::tests::remove_deallocates_tile_space_for_reuse',
+                                  '--skip', 'wgpu_atlas::tests::reused_texture_id_has_new_generation'])
+        self.assertEqual(commands[-1], ['cargo', '+1.98.1', 'test', '--locked', '-p', 'gpui_linux',
+                                       '--tests', '--features', 'gpui/test-support', '--', '--test-threads=2'])
         install_index = next(i for i,c in enumerate(commands) if c[0] == 'rustup')
         first_tests = next(i for i,c in enumerate(commands) if '-m' in c)
         self.assertLess(install_index, first_tests, 'importer tests invoke the pinned Cargo')
