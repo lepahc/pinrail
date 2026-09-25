@@ -5,7 +5,7 @@ import os
 from pathlib import Path
 import sys
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / 'scripts/ci'))
@@ -239,6 +239,100 @@ class NativeGateTests(unittest.TestCase):
                 with self.subTest(phase=phase, key=key), self.assertRaises(gate.GateError):
                     self.start(api) if started is None else self.finish(api, started)
                 self.assertEqual(len(api.writes), 2 if phase == 'after-patch' else 1)
+
+
+class NativeJobCollectionTests(unittest.TestCase):
+    def setUp(self):
+        # Shape/IDs/statuses from the saved attempt-1 jobs response for run
+        # 36091732474. The last check belongs to Linux run 36091732760 (external
+        # ID pinrail:36091732760:1:8), but Jobs API labels it with the native run.
+        head = '1dce6277eff3265df28a944760e877e62ce9e578'
+        controller = '77935162b649c4d32575fa0e8faae29389d63067'
+        self.snapshot = {'pr': 8, 'head': head, 'base': controller, 'base_ref': 'main',
+                         'controller': controller, 'run_id': '36091732474',
+                         'attempt': '1', 'suite': 'native-v1'}
+        rows = [
+            (107935396296, 'Resolve native snapshot', 'completed', 'success'),
+            (107935416307, 'pinrail-native-v1', 'in_progress', None),
+            (107935426467, 'Native worker (macos-arm64)', 'in_progress', None),
+            (107935426485, 'Native worker (macos-x86_64)', 'in_progress', None),
+            (107935426533, 'Native worker (windows-x86_64)', 'queued', None),
+            (107935428049, 'pinrail-main-v1', 'in_progress', None),
+        ]
+        self.jobs = [{'id': job_id, 'name': name, 'status': status, 'conclusion': conclusion,
+                      'head_sha': head, 'run_id': 36091732474, 'run_attempt': 1,
+                      'check_run_url': f'https://api.github.com/repos/lepahc/pinrail/check-runs/{job_id}'}
+                     for job_id, name, status, conclusion in rows]
+        # Completion below is deliberately a FIXTURE, not observed native success.
+        for job in self.jobs[2:5]:
+            job.update(status='completed', conclusion='success')
+        self.response = {'jobs': self.jobs, 'total_count': 6}
+        self.api = Mock(spec=['call'])
+        self.api.call.return_value = self.response
+
+    def result(self, matrix_result='success'):
+        return gate.native_result(self.api, self.snapshot, matrix_result)
+
+    def test_co_resident_legacy_outcome_does_not_change_native_success(self):
+        states = [('in_progress', None), ('queued', None)] + [
+            ('completed', conclusion) for conclusion in
+            ('success', 'failure', 'cancelled', 'skipped', 'neutral', 'timed_out',
+             'action_required', 'stale', 'startup_failure')]
+        for status, conclusion in states:
+            with self.subTest(status=status, conclusion=conclusion):
+                self.jobs[-1].update(status=status, conclusion=conclusion)
+                self.api.reset_mock()
+                self.assertEqual(self.result(), 'success')
+                self.api.call.assert_called_once_with(
+                    'GET', '/actions/runs/36091732474/attempts/1/jobs?per_page=100')
+
+    def test_green_legacy_cannot_mask_native_or_matrix_failure(self):
+        self.jobs[-1].update(status='completed', conclusion='success')  # Fixture.
+        for conclusion in ('failure', 'cancelled', 'skipped'):
+            for job in self.jobs[2:5]:
+                with self.subTest(platform=job['name'], conclusion=conclusion):
+                    job['conclusion'] = conclusion
+                    self.assertEqual(self.result(), 'failure')
+                    job['conclusion'] = 'success'
+            with self.subTest(matrix=conclusion):
+                self.assertEqual(self.result(conclusion), 'failure')
+
+    def test_green_legacy_cannot_mask_invalid_native_collection(self):
+        self.jobs[-1].update(status='completed', conclusion='success')  # Fixture.
+        changes = [
+            ('missing-arm', lambda j: j.pop(2), 'missing required native platform'),
+            ('missing-intel', lambda j: j.pop(3), 'missing required native platform'),
+            ('missing-windows', lambda j: j.pop(4), 'missing required native platform'),
+            ('duplicate-name', lambda j: j.append(dict(j[2], id=999)),
+             'unknown/duplicate native job'),
+            ('duplicate-id', lambda j: j[3].update(id=j[2]['id']), 'duplicate native job ID'),
+            ('foreign-run', lambda j: j[2].update(run_id=36091732760), 'job run mismatch'),
+            ('foreign-attempt', lambda j: j[2].update(run_attempt=2), 'job run mismatch'),
+            ('unfinished', lambda j: j[2].update(status='in_progress', conclusion=None),
+             'native job not completed with an admitted result'),
+            ('neutral', lambda j: j[2].update(conclusion='neutral'),
+             'native job not completed with an admitted result'),
+            ('unknown-worker', lambda j: j.append(dict(j[2], id=999, name='Native worker (other)')),
+             'unknown/duplicate native job'),
+            ('unknown-job', lambda j: j.append(dict(j[-1], id=999, name='Other check')),
+             'unknown/duplicate native job'),
+            ('legacy-near-match', lambda j: j[-1].update(name='pinrail-main-v1-extra'),
+             'unknown/duplicate native job'),
+            ('oversized', lambda j: j.extend(dict(j[-1], id=1000 + i) for i in range(95)),
+             'incomplete job collection'),
+        ]
+        for label, change, error in changes:
+            response = copy.deepcopy(self.response)
+            change(response['jobs'])
+            response['total_count'] = len(response['jobs'])
+            self.api.call.return_value = response
+            with self.subTest(case=label), self.assertRaisesRegex(gate.GateError, error):
+                self.result()
+        for total in (5, 7, 101, '6', True):
+            self.api.call.return_value = dict(self.response, total_count=total)
+            with self.subTest(total=total), self.assertRaisesRegex(
+                    gate.GateError, 'incomplete job collection'):
+                self.result()
 
 
 if __name__ == '__main__':
